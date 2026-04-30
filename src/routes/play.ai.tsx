@@ -9,6 +9,7 @@ import {
   initialBoard,
   Board,
   Player,
+  type AIDifficulty,
   type PlayerCharacter,
   applyMove,
   checkWinner,
@@ -17,13 +18,50 @@ import {
 } from "@/lib/matunga";
 import { TurnCard } from "./play.local";
 
-type Difficulty = "easy" | "medium" | "hard";
+type Difficulty = AIDifficulty;
+type AIMove = { from: [number, number]; to: [number, number] } | null;
+type AIWorkerResponse = { id: number; move: AIMove };
+
+const DIFFICULTY_OPTIONS: Array<{
+  id: Difficulty;
+  icon: string;
+  title: string;
+  description: string;
+}> = [
+  {
+    id: "easy",
+    icon: "🌱",
+    title: "Fácil",
+    description: "Movimentos aleatórios",
+  },
+  {
+    id: "medium",
+    icon: "🌿",
+    title: "Médio",
+    description: "Olha 1 jogada à frente",
+  },
+  {
+    id: "hard",
+    icon: "🌳",
+    title: "Difícil",
+    description: "Olha 2 jogadas à frente",
+  },
+  {
+    id: "extreme",
+    icon: "♞",
+    title: "Extremo",
+    description: "Busca profunda com poda e memória",
+  },
+];
+
+const getDifficultyTitle = (difficulty: Difficulty) =>
+  DIFFICULTY_OPTIONS.find((option) => option.id === difficulty)?.title ?? "IA";
 
 export const Route = createFileRoute("/play/ai")({
   head: () => ({
     meta: [
       { title: "Matunga — Contra a IA" },
-      { name: "description", content: "Jogue Matunga contra a IA com 3 níveis de dificuldade." },
+      { name: "description", content: "Jogue Matunga contra a IA com 4 níveis de dificuldade." },
     ],
   }),
   component: AIGame,
@@ -50,21 +88,72 @@ function AIGame() {
   useEffect(() => {
     if (!difficulty || winner) return;
     if (turn !== aiColor) return;
+    let worker: Worker | null = null;
+    let workerTimeout = 0;
     setThinking(true);
-    const t = setTimeout(() => {
-      const move = chooseAIMove(board, aiColor, difficulty);
+
+    const finishMove = (move: AIMove) => {
       if (!move) {
         setThinking(false);
         return;
       }
+
       const next = applyMove(board, move.from, move.to);
       const win = checkWinner(next, aiColor);
       setBoard(next);
       if (win) setWinner(aiColor);
       else setTurn(humanColor);
       setThinking(false);
-    }, 600);
-    return () => clearTimeout(t);
+    };
+
+    const t = setTimeout(
+      () => {
+        if (difficulty === "extreme" && typeof Worker !== "undefined") {
+          const requestId = Date.now();
+          worker = new Worker(new URL("../workers/ai-worker.ts", import.meta.url), {
+            type: "module",
+          });
+
+          worker.onmessage = (event: MessageEvent<AIWorkerResponse>) => {
+            if (event.data.id !== requestId) return;
+            window.clearTimeout(workerTimeout);
+            worker?.terminate();
+            worker = null;
+            finishMove(event.data.move);
+          };
+
+          worker.onerror = () => {
+            window.clearTimeout(workerTimeout);
+            worker?.terminate();
+            worker = null;
+            finishMove(chooseAIMove(board, aiColor, "easy"));
+          };
+
+          workerTimeout = window.setTimeout(() => {
+            worker?.terminate();
+            worker = null;
+            finishMove(chooseAIMove(board, aiColor, "easy"));
+          }, 2600);
+
+          worker.postMessage({
+            id: requestId,
+            board,
+            player: aiColor,
+            difficulty,
+          });
+          return;
+        }
+
+        finishMove(chooseAIMove(board, aiColor, difficulty));
+      },
+      difficulty === "extreme" ? 150 : 600,
+    );
+
+    return () => {
+      clearTimeout(t);
+      window.clearTimeout(workerTimeout);
+      worker?.terminate();
+    };
   }, [turn, board, difficulty, aiColor, humanColor, winner]);
 
   const reset = (color: Player = humanColor) => {
@@ -95,7 +184,11 @@ function AIGame() {
                 onChange={setAiCharacter}
               />
             </div>
-            <Button onClick={() => setCharactersChosen(true)} size="lg" className="justify-self-center min-w-48">
+            <Button
+              onClick={() => setCharactersChosen(true)}
+              size="lg"
+              className="justify-self-center min-w-48"
+            >
               Continuar
             </Button>
           </div>
@@ -107,25 +200,23 @@ function AIGame() {
   if (!difficulty) {
     return (
       <GameLayout title="Contra a IA" subtitle="Escolha a dificuldade">
-        <div className="grid sm:grid-cols-3 gap-4 max-w-2xl mx-auto">
-          {(["easy", "medium", "hard"] as Difficulty[]).map((d) => (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-4xl mx-auto">
+          {DIFFICULTY_OPTIONS.map((option) => (
             <button
-              key={d}
-              onClick={() => setDifficulty(d)}
+              key={option.id}
+              onClick={() => setDifficulty(option.id)}
               className="bg-card/95 rounded-2xl p-6 shadow-lg border-2 border-border hover-scale hover:border-primary text-center"
             >
-              <div className="text-4xl mb-2">{d === "easy" ? "🌱" : d === "medium" ? "🌿" : "🌳"}</div>
-              <h3 className="font-bold text-xl">
-                {d === "easy" ? "Fácil" : d === "medium" ? "Médio" : "Difícil"}
-              </h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                {d === "easy" ? "Movimentos aleatórios" : d === "medium" ? "Olha 1 jogada à frente" : "Olha 2 jogadas à frente"}
-              </p>
+              <div className="text-4xl mb-2">{option.icon}</div>
+              <h3 className="font-bold text-xl">{option.title}</h3>
+              <p className="text-sm text-muted-foreground mt-1">{option.description}</p>
             </button>
           ))}
         </div>
         <div className="text-center mt-4">
-          <Button onClick={() => setCharactersChosen(false)} variant="outline">Trocar personagens</Button>
+          <Button onClick={() => setCharactersChosen(false)} variant="outline">
+            Trocar personagens
+          </Button>
         </div>
       </GameLayout>
     );
@@ -133,14 +224,20 @@ function AIGame() {
 
   return (
     <GameLayout
-      title={`IA — ${difficulty === "easy" ? "Fácil" : difficulty === "medium" ? "Médio" : "Difícil"}`}
+      title={`IA — ${getDifficultyTitle(difficulty)}`}
       subtitle={`Você joga com as ${humanColor === "white" ? "brancas" : "pretas"}`}
     >
       <div className="grid md:grid-cols-[1fr_auto] gap-6 items-start justify-items-center">
         <div className="order-2 md:order-1 w-full max-w-xs space-y-3">
           <TurnCard turn={turn} winner={winner} characters={characters} />
-          {thinking && <p className="text-center text-sm text-muted-foreground animate-pulse">IA pensando…</p>}
-          <Button onClick={() => reset(humanColor === "white" ? "black" : "white")} variant="secondary" className="w-full">
+          {thinking && (
+            <p className="text-center text-sm text-muted-foreground animate-pulse">IA pensando…</p>
+          )}
+          <Button
+            onClick={() => reset(humanColor === "white" ? "black" : "white")}
+            variant="secondary"
+            className="w-full"
+          >
             Trocar de cor e reiniciar
           </Button>
           <Button onClick={() => reset()} variant="secondary" className="w-full">
@@ -149,7 +246,15 @@ function AIGame() {
           <Button onClick={() => setDifficulty(null)} variant="outline" className="w-full">
             Mudar dificuldade
           </Button>
-          <Button onClick={() => { setDifficulty(null); setCharactersChosen(false); reset("white"); }} variant="outline" className="w-full">
+          <Button
+            onClick={() => {
+              setDifficulty(null);
+              setCharactersChosen(false);
+              reset("white");
+            }}
+            variant="outline"
+            className="w-full"
+          >
             Trocar personagens
           </Button>
         </div>

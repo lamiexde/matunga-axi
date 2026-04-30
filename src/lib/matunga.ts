@@ -18,7 +18,9 @@ export interface RoomTurnState {
 export const encodeRoomPlayer = (playerId: string, character: PlayerCharacter) =>
   `${playerId}${ROOM_PLAYER_SEPARATOR}${character}`;
 
-export const decodeRoomPlayer = (value: string | null | undefined): {
+export const decodeRoomPlayer = (
+  value: string | null | undefined,
+): {
   playerId: string | null;
   character: PlayerCharacter | null;
 } => {
@@ -33,9 +35,9 @@ export const decodeRoomPlayer = (value: string | null | undefined): {
 export const roomPlayerMatches = (value: string | null | undefined, playerId: string) =>
   decodeRoomPlayer(value).playerId === playerId;
 
-export const otherPlayer = (player: Player): Player => player === "white" ? "black" : "white";
+export const otherPlayer = (player: Player): Player => (player === "white" ? "black" : "white");
 
-export const randomPlayer = (): Player => Math.random() < 0.5 ? "white" : "black";
+export const randomPlayer = (): Player => (Math.random() < 0.5 ? "white" : "black");
 
 export const encodeRoomTurn = (state: RoomTurnState) =>
   `${ROOM_TURN_PREFIX}${JSON.stringify(state)}`;
@@ -65,7 +67,11 @@ export const decodeRoomTurn = (value: string | null | undefined): RoomTurnState 
   return { player: "white", score: { white: 0, black: 0 }, deadlineAt: null };
 };
 
-export const createRoomTurn = (player: Player = randomPlayer(), score?: Record<Player, number>, deadlineAt?: number | null) =>
+export const createRoomTurn = (
+  player: Player = randomPlayer(),
+  score?: Record<Player, number>,
+  deadlineAt?: number | null,
+) =>
   encodeRoomTurn({
     player,
     score: score ?? { white: 0, black: 0 },
@@ -76,9 +82,7 @@ export const BOARD_SIZE = 6;
 
 export const initialBoard = (): Board => {
   // Pieces alternate on left and right edges
-  const b: Board = Array.from({ length: BOARD_SIZE }, () =>
-    Array<Cell>(BOARD_SIZE).fill(null),
-  );
+  const b: Board = Array.from({ length: BOARD_SIZE }, () => Array<Cell>(BOARD_SIZE).fill(null));
   for (let r = 0; r < BOARD_SIZE; r++) {
     if (r % 2 === 0) {
       b[r][0] = "white";
@@ -92,8 +96,14 @@ export const initialBoard = (): Board => {
 };
 
 const KNIGHT_OFFSETS: Array<[number, number]> = [
-  [-2, -1], [-2, 1], [-1, -2], [-1, 2],
-  [1, -2], [1, 2], [2, -1], [2, 1],
+  [-2, -1],
+  [-2, 1],
+  [-1, -2],
+  [-1, 2],
+  [1, -2],
+  [1, 2],
+  [2, -1],
+  [2, 1],
 ];
 
 export const inBounds = (r: number, c: number) =>
@@ -111,11 +121,7 @@ export const knightMoves = (board: Board, r: number, c: number) => {
 
 export const cloneBoard = (b: Board): Board => b.map((row) => [...row]);
 
-export const applyMove = (
-  b: Board,
-  from: [number, number],
-  to: [number, number],
-): Board => {
+export const applyMove = (b: Board, from: [number, number], to: [number, number]): Board => {
   const nb = cloneBoard(b);
   nb[to[0]][to[1]] = nb[from[0]][from[1]];
   nb[from[0]][from[1]] = null;
@@ -152,12 +158,10 @@ const isLShape = (cells: Array<[number, number]>) => {
     let line: Array<[number, number]> | null = null;
     if (allSameRow) {
       const sorted = [...others].sort((a, b) => a[1] - b[1]);
-      if (sorted[1][1] - sorted[0][1] === 1 && sorted[2][1] - sorted[1][1] === 1)
-        line = sorted;
+      if (sorted[1][1] - sorted[0][1] === 1 && sorted[2][1] - sorted[1][1] === 1) line = sorted;
     } else if (allSameCol) {
       const sorted = [...others].sort((a, b) => a[0] - b[0]);
-      if (sorted[1][0] - sorted[0][0] === 1 && sorted[2][0] - sorted[1][0] === 1)
-        line = sorted;
+      if (sorted[1][0] - sorted[0][0] === 1 && sorted[2][0] - sorted[1][0] === 1) line = sorted;
     }
     if (!line) continue;
     // foot must be adjacent (orthogonally) to one ENDPOINT of line, perpendicular to it
@@ -181,8 +185,7 @@ const isLShape = (cells: Array<[number, number]>) => {
 export const checkWinner = (board: Board, player: Player): boolean => {
   const cells: Array<[number, number]> = [];
   for (let r = 0; r < BOARD_SIZE; r++)
-    for (let c = 0; c < BOARD_SIZE; c++)
-      if (board[r][c] === player) cells.push([r, c]);
+    for (let c = 0; c < BOARD_SIZE; c++) if (board[r][c] === player) cells.push([r, c]);
 
   // Visual L: 3 collinear adjacent cells + 1 perpendicular at an endpoint.
   // (Knight-connectivity intentionally omitted: knight cannot reach an adjacent
@@ -206,38 +209,326 @@ export const allMovesFor = (
   for (let r = 0; r < BOARD_SIZE; r++)
     for (let c = 0; c < BOARD_SIZE; c++)
       if (board[r][c] === player) {
-        for (const m of knightMoves(board, r, c))
-          moves.push({ from: [r, c], to: m });
+        for (const m of knightMoves(board, r, c)) moves.push({ from: [r, c], to: m });
       }
   return moves;
 };
 
 // ---------- AI ----------
-type AIDifficulty = "easy" | "medium" | "hard";
+export type AIDifficulty = "easy" | "medium" | "hard" | "extreme";
+
+type Move = { from: [number, number]; to: [number, number] };
+
+const WIN_SCORE = 1_000_000;
+const EXTREME_TIME_LIMIT_MS = 2200;
+const EXTREME_MAX_DEPTH = 8;
+const EXACT = "exact";
+const LOWER = "lower";
+const UPPER = "upper";
+
+type TranspositionEntry = {
+  depth: number;
+  score: number;
+  bound: typeof EXACT | typeof LOWER | typeof UPPER;
+  bestMove?: Move;
+};
+
+const CENTER_WEIGHTS = [
+  [0, 1, 2, 2, 1, 0],
+  [1, 3, 5, 5, 3, 1],
+  [2, 5, 8, 8, 5, 2],
+  [2, 5, 8, 8, 5, 2],
+  [1, 3, 5, 5, 3, 1],
+  [0, 1, 2, 2, 1, 0],
+];
+
+const OPEN_SHAPE_WEIGHTS = [0, 14, 95, 1500, WIN_SCORE];
+const OPPONENT_SHAPE_WEIGHTS = [0, 16, 120, 2200, WIN_SCORE];
+
+const L_SHAPES: Array<Array<[number, number]>> = (() => {
+  const shapes = new Map<string, Array<[number, number]>>();
+  const addShape = (cells: Array<[number, number]>) => {
+    if (!cells.every(([r, c]) => inBounds(r, c))) return;
+    const sorted = [...cells].sort((a, b) => a[0] * BOARD_SIZE + a[1] - (b[0] * BOARD_SIZE + b[1]));
+    const key = sorted.map(([r, c]) => `${r}-${c}`).join("|");
+    shapes.set(key, sorted);
+  };
+
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c <= BOARD_SIZE - 3; c++) {
+      const line: Array<[number, number]> = [
+        [r, c],
+        [r, c + 1],
+        [r, c + 2],
+      ];
+      for (const endpoint of [line[0], line[2]]) {
+        addShape([...line, [endpoint[0] - 1, endpoint[1]]]);
+        addShape([...line, [endpoint[0] + 1, endpoint[1]]]);
+      }
+    }
+  }
+
+  for (let r = 0; r <= BOARD_SIZE - 3; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const line: Array<[number, number]> = [
+        [r, c],
+        [r + 1, c],
+        [r + 2, c],
+      ];
+      for (const endpoint of [line[0], line[2]]) {
+        addShape([...line, [endpoint[0], endpoint[1] - 1]]);
+        addShape([...line, [endpoint[0], endpoint[1] + 1]]);
+      }
+    }
+  }
+
+  return [...shapes.values()];
+})();
+
+const moveKey = (move: Move) => `${move.from[0]},${move.from[1]}>${move.to[0]},${move.to[1]}`;
+
+const boardKey = (board: Board, player: Player) => {
+  let key = player === "white" ? "w" : "b";
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      key += board[r][c] === null ? "0" : board[r][c] === "white" ? "1" : "2";
+    }
+  }
+  return key;
+};
+
+const countWinningMovesFor = (board: Board, player: Player, limit = 4) => {
+  let count = 0;
+  for (const move of allMovesFor(board, player)) {
+    if (checkWinner(applyMove(board, move.from, move.to), player)) {
+      count++;
+      if (count >= limit) return count;
+    }
+  }
+  return count;
+};
 
 const scoreBoardFor = (board: Board, player: Player): number => {
-  // Heuristic: count near-L formations (3-piece partial L's)
-  const opponent: Player = player === "white" ? "black" : "white";
-  if (checkWinner(board, player)) return 10000;
-  if (checkWinner(board, opponent)) return -10000;
+  const opponent = otherPlayer(player);
+  if (checkWinner(board, player)) return WIN_SCORE;
+  if (checkWinner(board, opponent)) return -WIN_SCORE;
 
   const own: Array<[number, number]> = [];
   const opp: Array<[number, number]> = [];
+  let placement = 0;
+
   for (let r = 0; r < BOARD_SIZE; r++)
     for (let c = 0; c < BOARD_SIZE; c++) {
-      if (board[r][c] === player) own.push([r, c]);
-      else if (board[r][c] === opponent) opp.push([r, c]);
+      if (board[r][c] === player) {
+        own.push([r, c]);
+        placement += CENTER_WEIGHTS[r][c];
+      } else if (board[r][c] === opponent) {
+        opp.push([r, c]);
+        placement -= CENTER_WEIGHTS[r][c];
+      }
     }
 
-  // partial connectivity score
   const pairs = (arr: Array<[number, number]>) => {
     let count = 0;
     for (let i = 0; i < arr.length; i++)
-      for (let j = i + 1; j < arr.length; j++)
-        if (knightDist(arr[i], arr[j])) count++;
+      for (let j = i + 1; j < arr.length; j++) if (knightDist(arr[i], arr[j])) count++;
     return count;
   };
-  return pairs(own) * 5 - pairs(opp) * 4;
+
+  let shapeScore = 0;
+  let ownThreats = 0;
+  let opponentThreats = 0;
+
+  for (const shape of L_SHAPES) {
+    let ownCount = 0;
+    let opponentCount = 0;
+
+    for (const [r, c] of shape) {
+      if (board[r][c] === player) ownCount++;
+      else if (board[r][c] === opponent) opponentCount++;
+    }
+
+    if (ownCount > 0 && opponentCount > 0) continue;
+
+    if (opponentCount === 0) {
+      shapeScore += OPEN_SHAPE_WEIGHTS[ownCount];
+      if (ownCount === 3) ownThreats++;
+    } else {
+      shapeScore -= OPPONENT_SHAPE_WEIGHTS[opponentCount];
+      if (opponentCount === 3) opponentThreats++;
+    }
+  }
+
+  const ownImmediateWins = countWinningMovesFor(board, player);
+  const opponentImmediateWins = countWinningMovesFor(board, opponent);
+  const mobility = allMovesFor(board, player).length - allMovesFor(board, opponent).length;
+
+  return (
+    shapeScore +
+    (ownThreats * ownThreats - opponentThreats * opponentThreats * 1.35) * 420 +
+    ownImmediateWins * 9500 -
+    opponentImmediateWins * 12000 +
+    pairs(own) * 28 -
+    pairs(opp) * 32 +
+    mobility * 8 +
+    placement * 5
+  );
+};
+
+const orderMoves = (
+  board: Board,
+  current: Player,
+  aiPlayer: Player,
+  moves: Move[],
+  preferredMove?: Move,
+) => {
+  const preferredKey = preferredMove ? moveKey(preferredMove) : null;
+
+  return moves
+    .map((move) => {
+      const next = applyMove(board, move.from, move.to);
+      return {
+        move,
+        preferred: preferredKey === moveKey(move),
+        score: checkWinner(next, current)
+          ? current === aiPlayer
+            ? WIN_SCORE
+            : -WIN_SCORE
+          : scoreBoardFor(next, aiPlayer),
+      };
+    })
+    .sort((a, b) => {
+      if (a.preferred !== b.preferred) return a.preferred ? -1 : 1;
+      return current === aiPlayer ? b.score - a.score : a.score - b.score;
+    })
+    .map(({ move }) => move);
+};
+
+const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
+  const opponent = otherPlayer(player);
+  const startedAt = performance.now();
+  const deadline = startedAt + EXTREME_TIME_LIMIT_MS;
+  const table = new Map<string, TranspositionEntry>();
+  let timeoutReached = false;
+  let bestMove = orderMoves(board, player, player, moves)[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  const timeIsUp = () => {
+    if (performance.now() >= deadline) timeoutReached = true;
+    return timeoutReached;
+  };
+
+  const search = (
+    b: Board,
+    current: Player,
+    depth: number,
+    ply: number,
+    alpha: number,
+    beta: number,
+  ): number => {
+    if (timeIsUp()) return scoreBoardFor(b, player);
+    if (checkWinner(b, player)) return WIN_SCORE - ply;
+    if (checkWinner(b, opponent)) return -WIN_SCORE + ply;
+    if (depth === 0) return scoreBoardFor(b, player);
+
+    const key = `${boardKey(b, current)}:${depth}`;
+    const entry = table.get(key);
+    const originalAlpha = alpha;
+    const originalBeta = beta;
+
+    if (entry && entry.depth >= depth) {
+      if (entry.bound === EXACT) return entry.score;
+      if (entry.bound === LOWER) alpha = Math.max(alpha, entry.score);
+      else if (entry.bound === UPPER) beta = Math.min(beta, entry.score);
+      if (alpha >= beta) return entry.score;
+    }
+
+    const currentMoves = allMovesFor(b, current);
+    if (currentMoves.length === 0) return scoreBoardFor(b, player);
+
+    const maximizing = current === player;
+    const orderedMoves = orderMoves(b, current, player, currentMoves, entry?.bestMove);
+    let bestLocalMove = orderedMoves[0];
+    let evaluatedMove = false;
+
+    if (maximizing) {
+      let value = Number.NEGATIVE_INFINITY;
+      for (const move of orderedMoves) {
+        if (timeIsUp()) break;
+        const next = applyMove(b, move.from, move.to);
+        const score = search(next, otherPlayer(current), depth - 1, ply + 1, alpha, beta);
+        evaluatedMove = true;
+        if (score > value) {
+          value = score;
+          bestLocalMove = move;
+        }
+        alpha = Math.max(alpha, value);
+        if (alpha >= beta) break;
+      }
+      if (!evaluatedMove) return scoreBoardFor(b, player);
+
+      table.set(key, {
+        depth,
+        score: value,
+        bestMove: bestLocalMove,
+        bound: value <= originalAlpha ? UPPER : value >= originalBeta ? LOWER : EXACT,
+      });
+      return value;
+    }
+
+    let value = Number.POSITIVE_INFINITY;
+    for (const move of orderedMoves) {
+      if (timeIsUp()) break;
+      const next = applyMove(b, move.from, move.to);
+      const score = search(next, otherPlayer(current), depth - 1, ply + 1, alpha, beta);
+      evaluatedMove = true;
+      if (score < value) {
+        value = score;
+        bestLocalMove = move;
+      }
+      beta = Math.min(beta, value);
+      if (alpha >= beta) break;
+    }
+    if (!evaluatedMove) return scoreBoardFor(b, player);
+
+    table.set(key, {
+      depth,
+      score: value,
+      bestMove: bestLocalMove,
+      bound: value <= originalAlpha ? UPPER : value >= originalBeta ? LOWER : EXACT,
+    });
+    return value;
+  };
+
+  for (let depth = 1; depth <= EXTREME_MAX_DEPTH; depth++) {
+    const orderedRoot = orderMoves(board, player, player, moves, bestMove);
+    let depthBestMove = bestMove;
+    let depthBestScore = Number.NEGATIVE_INFINITY;
+    let alpha = Number.NEGATIVE_INFINITY;
+    const beta = Number.POSITIVE_INFINITY;
+
+    for (const move of orderedRoot) {
+      if (timeIsUp()) break;
+      const next = applyMove(board, move.from, move.to);
+      const score = checkWinner(next, player)
+        ? WIN_SCORE
+        : search(next, opponent, depth - 1, 1, alpha, beta);
+
+      if (score > depthBestScore) {
+        depthBestScore = score;
+        depthBestMove = move;
+      }
+      alpha = Math.max(alpha, depthBestScore);
+    }
+
+    if (timeoutReached) break;
+    bestMove = depthBestMove;
+    bestScore = depthBestScore;
+
+    if (bestScore >= WIN_SCORE - EXTREME_MAX_DEPTH) break;
+  }
+
+  return bestMove;
 };
 
 export const chooseAIMove = (
@@ -252,7 +543,11 @@ export const chooseAIMove = (
     return moves[Math.floor(Math.random() * moves.length)];
   }
 
-  const opponent: Player = player === "white" ? "black" : "white";
+  if (difficulty === "extreme") {
+    return chooseExtremeAIMove(board, player, moves);
+  }
+
+  const opponent = otherPlayer(player);
   const depth = difficulty === "hard" ? 2 : 1;
   const startTime = performance.now();
   const maxTime = 450; // 450ms hard timeout
@@ -309,7 +604,7 @@ export const chooseAIMove = (
       bestMoves.push(m);
     }
   }
-  return bestMoves.length > 0 
+  return bestMoves.length > 0
     ? bestMoves[Math.floor(Math.random() * bestMoves.length)]
     : moves[Math.floor(Math.random() * moves.length)];
 };
