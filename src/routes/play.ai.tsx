@@ -133,7 +133,7 @@ function AIGame() {
             worker?.terminate();
             worker = null;
             finishMove(chooseAIMove(board, aiColor, "easy"));
-          }, 2600);
+          }, 5000);
 
           worker.postMessage({
             id: requestId,

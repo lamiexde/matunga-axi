@@ -220,8 +220,8 @@ export type AIDifficulty = "easy" | "medium" | "hard" | "extreme";
 type Move = { from: [number, number]; to: [number, number] };
 
 const WIN_SCORE = 1_000_000;
-const EXTREME_TIME_LIMIT_MS = 2200;
-const EXTREME_MAX_DEPTH = 8;
+const EXTREME_TIME_LIMIT_MS = 4600;
+const EXTREME_MAX_DEPTH = 14;
 const EXACT = "exact";
 const LOWER = "lower";
 const UPPER = "upper";
@@ -231,6 +231,20 @@ type TranspositionEntry = {
   score: number;
   bound: typeof EXACT | typeof LOWER | typeof UPPER;
   bestMove?: Move;
+};
+
+type BitMove = { from: number; to: number };
+
+type BitState = {
+  white: bigint;
+  black: bigint;
+};
+
+type BitTranspositionEntry = {
+  depth: number;
+  score: number;
+  bound: typeof EXACT | typeof LOWER | typeof UPPER;
+  bestMove?: BitMove;
 };
 
 const CENTER_WEIGHTS = [
@@ -285,7 +299,28 @@ const L_SHAPES: Array<Array<[number, number]>> = (() => {
   return [...shapes.values()];
 })();
 
+const INDEX_BITS = Array.from(
+  { length: BOARD_SIZE * BOARD_SIZE },
+  (_, index) => 1n << BigInt(index),
+);
+
+const CENTER_INDEX_WEIGHTS = CENTER_WEIGHTS.flat();
+
+const KNIGHT_INDEX_MOVES = Array.from({ length: BOARD_SIZE * BOARD_SIZE }, (_, index) => {
+  const r = Math.floor(index / BOARD_SIZE);
+  const c = index % BOARD_SIZE;
+  return KNIGHT_OFFSETS.map(([dr, dc]) => [r + dr, c + dc] as [number, number])
+    .filter(([nr, nc]) => inBounds(nr, nc))
+    .map(([nr, nc]) => nr * BOARD_SIZE + nc);
+});
+
+const L_MASKS = L_SHAPES.map((shape) =>
+  shape.reduce((mask, [r, c]) => mask | INDEX_BITS[r * BOARD_SIZE + c], 0n),
+);
+
 const moveKey = (move: Move) => `${move.from[0]},${move.from[1]}>${move.to[0]},${move.to[1]}`;
+
+const bitMoveKey = (move: BitMove) => move.from * BOARD_SIZE * BOARD_SIZE + move.to;
 
 const boardKey = (board: Board, player: Player) => {
   let key = player === "white" ? "w" : "b";
@@ -306,6 +341,206 @@ const countWinningMovesFor = (board: Board, player: Player, limit = 4) => {
     }
   }
   return count;
+};
+
+const hasBit = (mask: bigint, index: number) => (mask & INDEX_BITS[index]) !== 0n;
+
+const bitCount = (mask: bigint) => {
+  let count = 0;
+  let value = mask;
+  while (value) {
+    value &= value - 1n;
+    count++;
+  }
+  return count;
+};
+
+const hasWinnerMask = (mask: bigint) => L_MASKS.some((shape) => (mask & shape) === shape);
+
+const boardToBitState = (board: Board): BitState => {
+  let white = 0n;
+  let black = 0n;
+
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const bit = INDEX_BITS[r * BOARD_SIZE + c];
+      if (board[r][c] === "white") white |= bit;
+      else if (board[r][c] === "black") black |= bit;
+    }
+  }
+
+  return { white, black };
+};
+
+const bitPlayerMask = (state: BitState, player: Player) =>
+  player === "white" ? state.white : state.black;
+
+const bitOpponentMask = (state: BitState, player: Player) =>
+  player === "white" ? state.black : state.white;
+
+const bitStateKey = (state: BitState, current: Player) =>
+  `${current}:${state.white.toString(36)}:${state.black.toString(36)}`;
+
+const generateBitMoves = (state: BitState, player: Player): BitMove[] => {
+  const occupied = state.white | state.black;
+  const pieces = bitPlayerMask(state, player);
+  const moves: BitMove[] = [];
+
+  for (let from = 0; from < BOARD_SIZE * BOARD_SIZE; from++) {
+    if (!hasBit(pieces, from)) continue;
+    for (const to of KNIGHT_INDEX_MOVES[from]) {
+      if (!hasBit(occupied, to)) moves.push({ from, to });
+    }
+  }
+
+  return moves;
+};
+
+const applyBitMove = (state: BitState, player: Player, move: BitMove): BitState => {
+  const fromBit = INDEX_BITS[move.from];
+  const toBit = INDEX_BITS[move.to];
+
+  if (player === "white") {
+    return {
+      white: (state.white ^ fromBit) | toBit,
+      black: state.black,
+    };
+  }
+
+  return {
+    white: state.white,
+    black: (state.black ^ fromBit) | toBit,
+  };
+};
+
+const bitMoveToMove = (move: BitMove): Move => ({
+  from: [Math.floor(move.from / BOARD_SIZE), move.from % BOARD_SIZE],
+  to: [Math.floor(move.to / BOARD_SIZE), move.to % BOARD_SIZE],
+});
+
+const countBitWinningMoves = (state: BitState, player: Player, limit = 4) => {
+  let count = 0;
+  for (const move of generateBitMoves(state, player)) {
+    const next = applyBitMove(state, player, move);
+    if (hasWinnerMask(bitPlayerMask(next, player))) {
+      count++;
+      if (count >= limit) return count;
+    }
+  }
+  return count;
+};
+
+const findBitWinningMove = (state: BitState, player: Player) => {
+  for (const move of generateBitMoves(state, player)) {
+    const next = applyBitMove(state, player, move);
+    if (hasWinnerMask(bitPlayerMask(next, player))) return move;
+  }
+  return null;
+};
+
+const bitStaticScore = (state: BitState, player: Player): number => {
+  const opponent = otherPlayer(player);
+  const ownMask = bitPlayerMask(state, player);
+  const opponentMask = bitOpponentMask(state, player);
+
+  if (hasWinnerMask(ownMask)) return WIN_SCORE;
+  if (hasWinnerMask(opponentMask)) return -WIN_SCORE;
+
+  let shapeScore = 0;
+  let ownThreats = 0;
+  let opponentThreats = 0;
+  let ownAlmostThreats = 0;
+  let opponentAlmostThreats = 0;
+
+  for (const shape of L_MASKS) {
+    const ownCount = bitCount(shape & ownMask);
+    const opponentCount = bitCount(shape & opponentMask);
+
+    if (ownCount > 0 && opponentCount > 0) continue;
+
+    if (opponentCount === 0) {
+      shapeScore += OPEN_SHAPE_WEIGHTS[ownCount];
+      if (ownCount === 3) ownThreats++;
+      else if (ownCount === 2) ownAlmostThreats++;
+    } else {
+      shapeScore -= OPPONENT_SHAPE_WEIGHTS[opponentCount];
+      if (opponentCount === 3) opponentThreats++;
+      else if (opponentCount === 2) opponentAlmostThreats++;
+    }
+  }
+
+  let placement = 0;
+  let ownKnightLinks = 0;
+  let opponentKnightLinks = 0;
+
+  for (let index = 0; index < BOARD_SIZE * BOARD_SIZE; index++) {
+    if (hasBit(ownMask, index)) {
+      placement += CENTER_INDEX_WEIGHTS[index];
+      for (const to of KNIGHT_INDEX_MOVES[index])
+        if (to > index && hasBit(ownMask, to)) ownKnightLinks++;
+    } else if (hasBit(opponentMask, index)) {
+      placement -= CENTER_INDEX_WEIGHTS[index];
+      for (const to of KNIGHT_INDEX_MOVES[index]) {
+        if (to > index && hasBit(opponentMask, to)) opponentKnightLinks++;
+      }
+    }
+  }
+
+  const ownImmediateWins = countBitWinningMoves(state, player);
+  const opponentImmediateWins = countBitWinningMoves(state, opponent);
+  const mobility =
+    generateBitMoves(state, player).length - generateBitMoves(state, opponent).length;
+
+  return (
+    shapeScore +
+    ownImmediateWins * 26000 -
+    opponentImmediateWins * 32000 +
+    (ownImmediateWins >= 2 ? 180000 : 0) -
+    (opponentImmediateWins >= 2 ? 220000 : 0) +
+    (ownThreats * ownThreats - opponentThreats * opponentThreats * 1.55) * 1200 +
+    (ownAlmostThreats - opponentAlmostThreats * 1.25) * 120 +
+    (ownKnightLinks - opponentKnightLinks * 1.1) * 30 +
+    mobility * 10 +
+    placement * 7
+  );
+};
+
+const orderBitMoves = (
+  state: BitState,
+  current: Player,
+  aiPlayer: Player,
+  moves: BitMove[],
+  preferredMove?: BitMove,
+  killerMove?: BitMove,
+  history?: Map<number, number>,
+) => {
+  const opponent = otherPlayer(current);
+  const preferredKey = preferredMove ? bitMoveKey(preferredMove) : -1;
+  const killerKey = killerMove ? bitMoveKey(killerMove) : -1;
+
+  return moves
+    .map((move) => {
+      const key = bitMoveKey(move);
+      const next = applyBitMove(state, current, move);
+      const winsNow = hasWinnerMask(bitPlayerMask(next, current));
+      const allowsReplyWin = countBitWinningMoves(next, opponent, 1) > 0;
+      const createsFork = countBitWinningMoves(next, current, 2) >= 2;
+      const staticScore = bitStaticScore(next, aiPlayer);
+
+      return {
+        move,
+        score:
+          (key === preferredKey ? 5_000_000 : 0) +
+          (key === killerKey ? 900_000 : 0) +
+          (history?.get(key) ?? 0) +
+          (winsNow ? 4_000_000 : 0) +
+          (createsFork ? 900_000 : 0) -
+          (allowsReplyWin ? 1_800_000 : 0) +
+          (current === aiPlayer ? staticScore : -staticScore),
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map(({ move }) => move);
 };
 
 const scoreBoardFor = (board: Board, player: Player): number => {
@@ -404,13 +639,26 @@ const orderMoves = (
     .map(({ move }) => move);
 };
 
-const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
+const chooseExtremeAIMove = (board: Board, player: Player) => {
+  const initialState = boardToBitState(board);
   const opponent = otherPlayer(player);
   const startedAt = performance.now();
   const deadline = startedAt + EXTREME_TIME_LIMIT_MS;
-  const table = new Map<string, TranspositionEntry>();
+  const table = new Map<string, BitTranspositionEntry>();
+  const history = new Map<number, number>();
+  const killers: Array<BitMove | undefined> = [];
   let timeoutReached = false;
-  let bestMove = orderMoves(board, player, player, moves)[0];
+  let bitMoves = generateBitMoves(initialState, player);
+  const winningMove = findBitWinningMove(initialState, player);
+  if (winningMove) return bitMoveToMove(winningMove);
+
+  const safeMoves = bitMoves.filter((move) => {
+    const next = applyBitMove(initialState, player, move);
+    return countBitWinningMoves(next, opponent, 1) === 0;
+  });
+  if (safeMoves.length > 0) bitMoves = safeMoves;
+
+  let bestMove = orderBitMoves(initialState, player, player, bitMoves)[0];
   let bestScore = Number.NEGATIVE_INFINITY;
 
   const timeIsUp = () => {
@@ -419,19 +667,28 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
   };
 
   const search = (
-    b: Board,
+    state: BitState,
     current: Player,
     depth: number,
     ply: number,
     alpha: number,
     beta: number,
   ): number => {
-    if (timeIsUp()) return scoreBoardFor(b, player);
-    if (checkWinner(b, player)) return WIN_SCORE - ply;
-    if (checkWinner(b, opponent)) return -WIN_SCORE + ply;
-    if (depth === 0) return scoreBoardFor(b, player);
+    if (timeIsUp()) return bitStaticScore(state, player);
 
-    const key = `${boardKey(b, current)}:${depth}`;
+    const playerMask = bitPlayerMask(state, player);
+    const opponentMask = bitOpponentMask(state, player);
+    if (hasWinnerMask(playerMask)) return WIN_SCORE - ply;
+    if (hasWinnerMask(opponentMask)) return -WIN_SCORE + ply;
+
+    const currentWinningMove = findBitWinningMove(state, current);
+    if (currentWinningMove) {
+      return current === player ? WIN_SCORE - ply : -WIN_SCORE + ply;
+    }
+
+    if (depth === 0) return bitStaticScore(state, player);
+
+    const key = `${bitStateKey(state, current)}:${depth}`;
     const entry = table.get(key);
     const originalAlpha = alpha;
     const originalBeta = beta;
@@ -443,11 +700,19 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
       if (alpha >= beta) return entry.score;
     }
 
-    const currentMoves = allMovesFor(b, current);
-    if (currentMoves.length === 0) return scoreBoardFor(b, player);
+    const currentMoves = generateBitMoves(state, current);
+    if (currentMoves.length === 0) return bitStaticScore(state, player);
 
     const maximizing = current === player;
-    const orderedMoves = orderMoves(b, current, player, currentMoves, entry?.bestMove);
+    const orderedMoves = orderBitMoves(
+      state,
+      current,
+      player,
+      currentMoves,
+      entry?.bestMove,
+      killers[ply],
+      history,
+    );
     let bestLocalMove = orderedMoves[0];
     let evaluatedMove = false;
 
@@ -455,7 +720,7 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
       let value = Number.NEGATIVE_INFINITY;
       for (const move of orderedMoves) {
         if (timeIsUp()) break;
-        const next = applyMove(b, move.from, move.to);
+        const next = applyBitMove(state, current, move);
         const score = search(next, otherPlayer(current), depth - 1, ply + 1, alpha, beta);
         evaluatedMove = true;
         if (score > value) {
@@ -463,9 +728,14 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
           bestLocalMove = move;
         }
         alpha = Math.max(alpha, value);
-        if (alpha >= beta) break;
+        if (alpha >= beta) {
+          killers[ply] = move;
+          const key = bitMoveKey(move);
+          history.set(key, (history.get(key) ?? 0) + depth * depth);
+          break;
+        }
       }
-      if (!evaluatedMove) return scoreBoardFor(b, player);
+      if (!evaluatedMove) return bitStaticScore(state, player);
 
       table.set(key, {
         depth,
@@ -479,7 +749,7 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
     let value = Number.POSITIVE_INFINITY;
     for (const move of orderedMoves) {
       if (timeIsUp()) break;
-      const next = applyMove(b, move.from, move.to);
+      const next = applyBitMove(state, current, move);
       const score = search(next, otherPlayer(current), depth - 1, ply + 1, alpha, beta);
       evaluatedMove = true;
       if (score < value) {
@@ -487,9 +757,14 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
         bestLocalMove = move;
       }
       beta = Math.min(beta, value);
-      if (alpha >= beta) break;
+      if (alpha >= beta) {
+        killers[ply] = move;
+        const key = bitMoveKey(move);
+        history.set(key, (history.get(key) ?? 0) + depth * depth);
+        break;
+      }
     }
-    if (!evaluatedMove) return scoreBoardFor(b, player);
+    if (!evaluatedMove) return bitStaticScore(state, player);
 
     table.set(key, {
       depth,
@@ -501,7 +776,15 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
   };
 
   for (let depth = 1; depth <= EXTREME_MAX_DEPTH; depth++) {
-    const orderedRoot = orderMoves(board, player, player, moves, bestMove);
+    const orderedRoot = orderBitMoves(
+      initialState,
+      player,
+      player,
+      bitMoves,
+      bestMove,
+      killers[0],
+      history,
+    );
     let depthBestMove = bestMove;
     let depthBestScore = Number.NEGATIVE_INFINITY;
     let alpha = Number.NEGATIVE_INFINITY;
@@ -509,8 +792,8 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
 
     for (const move of orderedRoot) {
       if (timeIsUp()) break;
-      const next = applyMove(board, move.from, move.to);
-      const score = checkWinner(next, player)
+      const next = applyBitMove(initialState, player, move);
+      const score = hasWinnerMask(bitPlayerMask(next, player))
         ? WIN_SCORE
         : search(next, opponent, depth - 1, 1, alpha, beta);
 
@@ -528,7 +811,7 @@ const chooseExtremeAIMove = (board: Board, player: Player, moves: Move[]) => {
     if (bestScore >= WIN_SCORE - EXTREME_MAX_DEPTH) break;
   }
 
-  return bestMove;
+  return bitMoveToMove(bestMove);
 };
 
 export const chooseAIMove = (
@@ -544,7 +827,7 @@ export const chooseAIMove = (
   }
 
   if (difficulty === "extreme") {
-    return chooseExtremeAIMove(board, player, moves);
+    return chooseExtremeAIMove(board, player);
   }
 
   const opponent = otherPlayer(player);
