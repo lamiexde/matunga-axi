@@ -6,6 +6,7 @@ const CONFIG = {
   animatedGrassRatio: 0.22,
   windIntensity: 0.48,
   targetFps: 34,
+  mobileBreakpoint: 768,
 };
 
 interface GrassBlade {
@@ -60,7 +61,13 @@ function mixColor(a: string, b: string, t: number, alpha = 1) {
   return `rgba(${Math.round(lerp(ca[0], cb[0], t))}, ${Math.round(lerp(ca[1], cb[1], t))}, ${Math.round(lerp(ca[2], cb[2], t))}, ${alpha})`;
 }
 
-function drawGrassBase(ctx: CanvasRenderingContext2D, width: number, height: number, dpr: number) {
+function drawGrassBase(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  dpr: number,
+  detailScale: number,
+) {
   const random = createSeededRandom(CONFIG.seed + 1);
   const gradient = ctx.createLinearGradient(0, 0, width, height);
   gradient.addColorStop(0, "#c6e27d");
@@ -70,7 +77,8 @@ function drawGrassBase(ctx: CanvasRenderingContext2D, width: number, height: num
   ctx.fillRect(0, 0, width, height);
 
   ctx.globalCompositeOperation = "overlay";
-  for (let i = 0; i < 180; i++) {
+  const spotCount = Math.round(180 * detailScale);
+  for (let i = 0; i < spotCount; i++) {
     const x = random() * width;
     const y = random() * height;
     const r = lerp(42, 180, random());
@@ -84,7 +92,7 @@ function drawGrassBase(ctx: CanvasRenderingContext2D, width: number, height: num
   }
   ctx.globalCompositeOperation = "source-over";
 
-  const noiseScale = 3;
+  const noiseScale = detailScale < 0.7 ? 5 : 3;
   const noise = document.createElement("canvas");
   noise.width = Math.ceil((width * dpr) / noiseScale);
   noise.height = Math.ceil((height * dpr) / noiseScale);
@@ -135,15 +143,28 @@ function generateGrassBlades(width: number, height: number, density: number, den
       alpha: lerp(0.3, 0.82, random()),
       phase: random() * Math.PI * 2,
       sway: lerp(0.18, 1.08, random()),
-      color: mixColor(shade > 0.54 ? "#d9dc75" : "#5da94f", shade > 0.54 ? "#78b64f" : "#b8d266", random()),
+      color: mixColor(
+        shade > 0.54 ? "#d9dc75" : "#5da94f",
+        shade > 0.54 ? "#78b64f" : "#b8d266",
+        random(),
+      ),
     });
   }
 
   return blades;
 }
 
-function drawBlade(ctx: CanvasRenderingContext2D, blade: GrassBlade, time: number, animated: boolean, reducedMotion: boolean) {
-  const sway = animated && !reducedMotion ? Math.sin(time * 0.0012 + blade.phase) * CONFIG.windIntensity * blade.sway : 0;
+function drawBlade(
+  ctx: CanvasRenderingContext2D,
+  blade: GrassBlade,
+  time: number,
+  animated: boolean,
+  reducedMotion: boolean,
+) {
+  const sway =
+    animated && !reducedMotion
+      ? Math.sin(time * 0.0012 + blade.phase) * CONFIG.windIntensity * blade.sway
+      : 0;
   const tipX = blade.x + (blade.lean + sway * 0.24) * blade.h;
   const tipY = blade.y - blade.h;
 
@@ -164,13 +185,24 @@ function drawBlade(ctx: CanvasRenderingContext2D, blade: GrassBlade, time: numbe
   ctx.globalAlpha = 1;
 }
 
-function drawGrassDetails(ctx: CanvasRenderingContext2D, blades: GrassBlade[], time: number, animated: boolean, reducedMotion: boolean) {
+function drawGrassDetails(
+  ctx: CanvasRenderingContext2D,
+  blades: GrassBlade[],
+  time: number,
+  animated: boolean,
+  reducedMotion: boolean,
+) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   for (const blade of blades) drawBlade(ctx, blade, time, animated, reducedMotion);
 }
 
-function drawGroundDetails(ctx: CanvasRenderingContext2D, width: number, height: number, densityScale: number) {
+function drawGroundDetails(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  densityScale: number,
+) {
   const random = createSeededRandom(CONFIG.seed + 3);
 
   for (let i = 0; i < 115 * densityScale; i++) {
@@ -211,7 +243,13 @@ function generateParticles(width: number, height: number, reducedMotion: boolean
   }));
 }
 
-function drawParticles(ctx: CanvasRenderingContext2D, particles: Particle[], time: number, width: number, height: number) {
+function drawParticles(
+  ctx: CanvasRenderingContext2D,
+  particles: Particle[],
+  time: number,
+  width: number,
+  height: number,
+) {
   ctx.save();
   ctx.fillStyle = "#f4e4a4";
   for (const particle of particles) {
@@ -235,6 +273,8 @@ export function ProceduralFieldBackground() {
     if (!canvas || !ctx) return;
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const isMobile = window.innerWidth < CONFIG.mobileBreakpoint;
+    const staticOnly = reducedMotion || isMobile;
     let width = 0;
     let height = 0;
     let dpr = 1;
@@ -247,16 +287,34 @@ export function ProceduralFieldBackground() {
     let animationFrame = 0;
     let resizeTimer = 0;
     let lastFrame = 0;
+    let visible = !document.hidden;
 
     function renderStaticLayer() {
       if (!staticCtx) return;
-      drawGrassBase(staticCtx, width, height, dpr);
+      const detailScale = isMobile ? 0.58 : 1;
+      drawGrassBase(staticCtx, width, height, dpr, detailScale);
       drawGroundDetails(staticCtx, width, height, densityScale);
-      drawGrassDetails(staticCtx, reducedMotion ? blades : blades.filter((_, index) => index % 4 !== 0), 0, false, reducedMotion);
+      drawGrassDetails(
+        staticCtx,
+        staticOnly ? blades : blades.filter((_, index) => index % 4 !== 0),
+        0,
+        false,
+        reducedMotion,
+      );
+    }
+
+    function drawFrame(time = 0) {
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(staticLayer, 0, 0, width, height);
+
+      if (!staticOnly) {
+        drawGrassDetails(ctx, animatedBlades, time, true, reducedMotion);
+        drawParticles(ctx, particles, time, width, height);
+      }
     }
 
     function resizeCanvas() {
-      dpr = Math.min(2, window.devicePixelRatio || 1);
+      dpr = Math.min(isMobile ? 1 : 2, window.devicePixelRatio || 1);
       width = window.innerWidth;
       height = window.innerHeight;
       canvas.width = Math.floor(width * dpr);
@@ -271,11 +329,14 @@ export function ProceduralFieldBackground() {
       staticCtx = staticLayer.getContext("2d");
       staticCtx?.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      densityScale = Math.min(width, height) < 680 ? 0.78 : clamp((width * height) / (1280 * 760), 0.9, 1.55);
+      densityScale = isMobile ? 0.54 : clamp((width * height) / (1280 * 760), 0.9, 1.55);
       blades = generateGrassBlades(width, height, CONFIG.grassDensity, densityScale);
-      animatedBlades = blades.filter((_, index) => index % Math.max(2, Math.round(1 / CONFIG.animatedGrassRatio)) === 0);
-      particles = generateParticles(width, height, reducedMotion);
+      animatedBlades = blades.filter(
+        (_, index) => index % Math.max(2, Math.round(1 / CONFIG.animatedGrassRatio)) === 0,
+      );
+      particles = generateParticles(width, height, staticOnly);
       renderStaticLayer();
+      drawFrame(performance.now());
     }
 
     function scheduleResize() {
@@ -284,6 +345,11 @@ export function ProceduralFieldBackground() {
     }
 
     function animate(time = 0) {
+      if (!visible) {
+        animationFrame = requestAnimationFrame(animate);
+        return;
+      }
+
       const minFrameTime = reducedMotion ? 1000 : 1000 / CONFIG.targetFps;
       if (time - lastFrame < minFrameTime) {
         animationFrame = requestAnimationFrame(animate);
@@ -291,27 +357,33 @@ export function ProceduralFieldBackground() {
       }
 
       lastFrame = time;
-      ctx.clearRect(0, 0, width, height);
-      ctx.drawImage(staticLayer, 0, 0, width, height);
-
-      if (!reducedMotion) {
-        drawGrassDetails(ctx, animatedBlades, time, true, reducedMotion);
-        drawParticles(ctx, particles, time, width, height);
-      }
-
+      drawFrame(time);
       animationFrame = requestAnimationFrame(animate);
     }
 
+    function handleVisibilityChange() {
+      visible = !document.hidden;
+      lastFrame = performance.now();
+    }
+
     resizeCanvas();
-    animationFrame = requestAnimationFrame(animate);
+    if (!staticOnly) animationFrame = requestAnimationFrame(animate);
     window.addEventListener("resize", scheduleResize, { passive: true });
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.clearTimeout(resizeTimer);
       window.removeEventListener("resize", scheduleResize);
-      cancelAnimationFrame(animationFrame);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (animationFrame) cancelAnimationFrame(animationFrame);
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="fixed inset-0 h-screen w-screen pointer-events-none" aria-hidden="true" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className="fixed inset-0 h-screen w-screen pointer-events-none"
+      aria-hidden="true"
+    />
+  );
 }
