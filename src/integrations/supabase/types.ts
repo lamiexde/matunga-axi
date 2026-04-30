@@ -59,9 +59,7 @@ export type Database = {
           created_at: string
           id: string
           player_black: string | null
-          player_black_character: string | null
           player_white: string | null
-          player_white_character: string | null
           turn: string
           updated_at: string
           winner: string | null
@@ -72,9 +70,7 @@ export type Database = {
           created_at?: string
           id?: string
           player_black?: string | null
-          player_black_character?: string | null
           player_white?: string | null
-          player_white_character?: string | null
           turn?: string
           updated_at?: string
           winner?: string | null
@@ -85,9 +81,7 @@ export type Database = {
           created_at?: string
           id?: string
           player_black?: string | null
-          player_black_character?: string | null
           player_white?: string | null
-          player_white_character?: string | null
           turn?: string
           updated_at?: string
           winner?: string | null
@@ -100,16 +94,14 @@ export type Database = {
     }
     Functions: {
       join_matunga_room: {
-        Args: { _character: string; _code: string; _player_id: string }
+        Args: { _code: string; _player_id: string }
         Returns: {
           board: Json
           code: string
           created_at: string
           id: string
           player_black: string | null
-          player_black_character: string | null
           player_white: string | null
-          player_white_character: string | null
           turn: string
           updated_at: string
           winner: string | null

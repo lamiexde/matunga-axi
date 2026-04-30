@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { Send, Smile } from "lucide-react";
-import type { Player } from "@/lib/matunga";
+import type { Player, PlayerCharacter } from "@/lib/matunga";
+import { getCharacterLabel } from "@/components/CharacterPicker";
 
 import wLaugh from "@/assets/emoji-white-laugh.png";
 import wCry from "@/assets/emoji-white-cry.png";
@@ -55,11 +56,12 @@ interface Props {
   roomId: string;
   myColor: Player | null;
   myPlayerId: string;
+  characters?: Partial<Record<Player, PlayerCharacter | null>>;
 }
 
 const MAX_MESSAGES = 100;
 
-export function ChatBox({ roomId, myColor, myPlayerId }: Props) {
+export function ChatBox({ roomId, myColor, myPlayerId, characters }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState("");
   const [showEmojis, setShowEmojis] = useState(false);
@@ -183,7 +185,7 @@ export function ChatBox({ roomId, myColor, myPlayerId }: Props) {
                   "text-[10px] opacity-70 mt-0.5",
                   mine ? "text-right" : "text-left",
                 )}>
-                  {m.player_color === "white" ? "Brancas" : "Pretas"}
+                  {getCharacterLabel(characters?.[m.player_color] ?? (m.player_color === "white" ? "white_horse" : "black_horse"))}
                 </div>
               </div>
             </div>

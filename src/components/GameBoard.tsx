@@ -136,8 +136,13 @@ export function GameBoard({ board, turn, winner, onMove, controls, locked, chara
   };
 
   return (
-    <div className="fence-border bg-[var(--color-pasture)] p-3 sm:p-4 inline-block">
-      <div className="grid grid-cols-6 gap-0 rounded-md overflow-hidden">
+    <div className="board-yard inline-block">
+      <div className="cartoon-fence cartoon-fence-top" aria-hidden="true" />
+      <div className="cartoon-fence cartoon-fence-right" aria-hidden="true" />
+      <div className="cartoon-fence cartoon-fence-bottom" aria-hidden="true" />
+      <div className="cartoon-fence cartoon-fence-left" aria-hidden="true" />
+      <div className="board-grass-ring" aria-hidden="true" />
+      <div className="relative z-10 grid grid-cols-6 gap-0 rounded-md overflow-hidden shadow-inner board-grid">
         {board.map((row, r) =>
           row.map((cell, c) => {
             const isSelected = selected?.[0] === r && selected?.[1] === c;

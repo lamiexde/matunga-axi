@@ -4,6 +4,74 @@ export type PlayerCharacter = "white_horse" | "black_horse" | "grandma";
 export type Cell = Player | null;
 export type Board = Cell[][]; // 6x6 [row][col]
 
+const ROOM_PLAYER_SEPARATOR = "::character::";
+const ROOM_TURN_PREFIX = "matunga-turn:";
+const PLAYER_CHARACTERS: PlayerCharacter[] = ["white_horse", "black_horse", "grandma"];
+export const MOVE_TIME_LIMIT_MS = 3 * 60 * 1000;
+
+export interface RoomTurnState {
+  player: Player;
+  score: Record<Player, number>;
+  deadlineAt: number | null;
+}
+
+export const encodeRoomPlayer = (playerId: string, character: PlayerCharacter) =>
+  `${playerId}${ROOM_PLAYER_SEPARATOR}${character}`;
+
+export const decodeRoomPlayer = (value: string | null | undefined): {
+  playerId: string | null;
+  character: PlayerCharacter | null;
+} => {
+  if (!value) return { playerId: null, character: null };
+  const [playerId, character] = value.split(ROOM_PLAYER_SEPARATOR);
+  if (playerId && PLAYER_CHARACTERS.includes(character as PlayerCharacter)) {
+    return { playerId, character: character as PlayerCharacter };
+  }
+  return { playerId: value, character: null };
+};
+
+export const roomPlayerMatches = (value: string | null | undefined, playerId: string) =>
+  decodeRoomPlayer(value).playerId === playerId;
+
+export const otherPlayer = (player: Player): Player => player === "white" ? "black" : "white";
+
+export const randomPlayer = (): Player => Math.random() < 0.5 ? "white" : "black";
+
+export const encodeRoomTurn = (state: RoomTurnState) =>
+  `${ROOM_TURN_PREFIX}${JSON.stringify(state)}`;
+
+export const decodeRoomTurn = (value: string | null | undefined): RoomTurnState => {
+  if (value === "black" || value === "white") {
+    return { player: value, score: { white: 0, black: 0 }, deadlineAt: null };
+  }
+
+  if (value?.startsWith(ROOM_TURN_PREFIX)) {
+    try {
+      const parsed = JSON.parse(value.slice(ROOM_TURN_PREFIX.length)) as Partial<RoomTurnState>;
+      const player = parsed.player === "black" ? "black" : "white";
+      return {
+        player,
+        score: {
+          white: Number(parsed.score?.white ?? 0),
+          black: Number(parsed.score?.black ?? 0),
+        },
+        deadlineAt: typeof parsed.deadlineAt === "number" ? parsed.deadlineAt : null,
+      };
+    } catch {
+      return { player: "white", score: { white: 0, black: 0 }, deadlineAt: null };
+    }
+  }
+
+  return { player: "white", score: { white: 0, black: 0 }, deadlineAt: null };
+};
+
+export const createRoomTurn = (player: Player = randomPlayer(), score?: Record<Player, number>, deadlineAt?: number | null) =>
+  encodeRoomTurn({
+    player,
+    score: score ?? { white: 0, black: 0 },
+    deadlineAt: deadlineAt ?? null,
+  });
+
 export const BOARD_SIZE = 6;
 
 export const initialBoard = (): Board => {

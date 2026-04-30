@@ -6,7 +6,14 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CharacterPicker } from "@/components/CharacterPicker";
 import { supabase } from "@/integrations/supabase/client";
-import { initialBoard, generateRoomCode, getOrCreatePlayerId, type PlayerCharacter } from "@/lib/matunga";
+import {
+  encodeRoomPlayer,
+  createRoomTurn,
+  initialBoard,
+  generateRoomCode,
+  getOrCreatePlayerId,
+  type PlayerCharacter,
+} from "@/lib/matunga";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/play/online/")({
@@ -29,15 +36,31 @@ function OnlineLobby() {
     setCreating(true);
     try {
       const playerId = getOrCreatePlayerId();
-      const newCode = generateRoomCode();
-      const { error } = await supabase.from("matunga_rooms").insert({
-        code: newCode,
-        board: initialBoard() as any,
-        turn: "white",
-        player_white: playerId,
-        player_white_character: character,
-      });
-      if (error) throw error;
+      let newCode = generateRoomCode();
+      let created = false;
+
+      for (let attempt = 0; attempt < 4 && !created; attempt++) {
+        const { error } = await supabase.from("matunga_rooms").insert({
+          code: newCode,
+          board: initialBoard() as any,
+          turn: createRoomTurn(),
+          player_white: encodeRoomPlayer(playerId, character),
+        });
+
+        if (!error) {
+          created = true;
+          break;
+        }
+
+        if (String(error.message).toLowerCase().includes("duplicate")) {
+          newCode = generateRoomCode();
+          continue;
+        }
+
+        throw error;
+      }
+
+      if (!created) throw new Error("room_code_collision");
       navigate({ to: "/play/online/$code", params: { code: newCode } });
     } catch (e: any) {
       toast.error("Não consegui criar a sala. Tente novamente.");
@@ -48,10 +71,10 @@ function OnlineLobby() {
   };
 
   return (
-    <GameLayout title="Jogar online" subtitle="Compartilhe um código com seu oponente">
+    <GameLayout title="Jogar online" subtitle="Escolha seu personagem antes de gerar o código da sala">
       <div className="space-y-4 max-w-3xl mx-auto">
         <Card className="p-5 bg-card/95">
-          <h2 className="font-bold text-xl mb-3">Escolha seu personagem</h2>
+          <h2 className="font-bold text-xl mb-3">Saguão do jogador 1</h2>
           <CharacterPicker value={character} onChange={setCharacter} />
         </Card>
 
@@ -59,7 +82,7 @@ function OnlineLobby() {
         <Card className="p-6 bg-card/95">
           <h2 className="font-bold text-xl mb-3">🎲 Criar uma sala</h2>
           <p className="text-sm text-muted-foreground mb-4">
-            Você entra como primeiro jogador. Compartilhe o código para seu oponente escolher outro personagem.
+            O código será criado com seu personagem já reservado nesta sala.
           </p>
           <Button onClick={createRoom} disabled={creating} className="w-full" size="lg">
             {creating ? "Criando…" : "Criar sala"}

@@ -22,22 +22,24 @@ const CHARACTER_ASSETS: Record<PlayerCharacter, { src: string; alt: string }> = 
 export function HorsePiece({ player, selected, shake, celebrate, size = 56, character }: Props) {
   const fallbackCharacter: PlayerCharacter = player === "white" ? "white_horse" : "black_horse";
   const piece = CHARACTER_ASSETS[character ?? fallbackCharacter];
+  const displaySize = character === "grandma" ? Math.round(size * 1.1) : size;
 
   return (
     <img
+      key={piece.src}
       src={piece.src}
       alt={piece.alt}
-      width={size}
-      height={size}
+      width={displaySize}
+      height={displaySize}
       draggable={false}
       loading="lazy"
       className={cn(
-        "select-none transition-transform duration-200 pointer-events-none",
+        "select-none transition-transform duration-200 pointer-events-none object-contain",
         selected && "piece-selected",
         shake && "animate-shake",
         celebrate && "animate-celebrate",
       )}
-      style={{ width: size, height: size }}
+      style={{ width: displaySize, height: displaySize }}
     />
   );
 }

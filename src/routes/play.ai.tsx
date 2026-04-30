@@ -4,13 +4,16 @@ import { GameLayout } from "@/components/GameLayout";
 import { GameBoard } from "@/components/GameBoard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { CharacterPicker } from "@/components/CharacterPicker";
 import {
   initialBoard,
   Board,
   Player,
+  type PlayerCharacter,
   applyMove,
   checkWinner,
   chooseAIMove,
+  randomPlayer,
 } from "@/lib/matunga";
 import { TurnCard } from "./play.local";
 
@@ -27,14 +30,21 @@ export const Route = createFileRoute("/play/ai")({
 });
 
 function AIGame() {
+  const [charactersChosen, setCharactersChosen] = useState(false);
+  const [humanCharacter, setHumanCharacter] = useState<PlayerCharacter>("white_horse");
+  const [aiCharacter, setAiCharacter] = useState<PlayerCharacter>("black_horse");
   const [difficulty, setDifficulty] = useState<Difficulty | null>(null);
   const [humanColor, setHumanColor] = useState<Player>("white");
   const [board, setBoard] = useState<Board>(initialBoard());
-  const [turn, setTurn] = useState<Player>("white");
+  const [turn, setTurn] = useState<Player>(randomPlayer);
   const [winner, setWinner] = useState<Player | null>(null);
   const [thinking, setThinking] = useState(false);
 
   const aiColor: Player = humanColor === "white" ? "black" : "white";
+  const characters = {
+    [humanColor]: humanCharacter,
+    [aiColor]: aiCharacter,
+  } as Partial<Record<Player, PlayerCharacter>>;
 
   // AI move trigger
   useEffect(() => {
@@ -59,10 +69,40 @@ function AIGame() {
 
   const reset = (color: Player = humanColor) => {
     setBoard(initialBoard());
-    setTurn("white");
+    setTurn(randomPlayer());
     setWinner(null);
     setHumanColor(color);
   };
+
+  if (!charactersChosen) {
+    return (
+      <GameLayout title="Contra a IA" subtitle="Escolha os personagens">
+        <Card className="max-w-3xl mx-auto p-5 bg-card/95">
+          <div className="grid gap-6">
+            <div>
+              <h2 className="font-bold text-xl mb-3">Você</h2>
+              <CharacterPicker
+                value={humanCharacter}
+                unavailable={[aiCharacter]}
+                onChange={setHumanCharacter}
+              />
+            </div>
+            <div>
+              <h2 className="font-bold text-xl mb-3">IA</h2>
+              <CharacterPicker
+                value={aiCharacter}
+                unavailable={[humanCharacter]}
+                onChange={setAiCharacter}
+              />
+            </div>
+            <Button onClick={() => setCharactersChosen(true)} size="lg" className="justify-self-center min-w-48">
+              Continuar
+            </Button>
+          </div>
+        </Card>
+      </GameLayout>
+    );
+  }
 
   if (!difficulty) {
     return (
@@ -84,6 +124,9 @@ function AIGame() {
             </button>
           ))}
         </div>
+        <div className="text-center mt-4">
+          <Button onClick={() => setCharactersChosen(false)} variant="outline">Trocar personagens</Button>
+        </div>
       </GameLayout>
     );
   }
@@ -95,7 +138,7 @@ function AIGame() {
     >
       <div className="grid md:grid-cols-[1fr_auto] gap-6 items-start justify-items-center">
         <div className="order-2 md:order-1 w-full max-w-xs space-y-3">
-          <TurnCard turn={turn} winner={winner} />
+          <TurnCard turn={turn} winner={winner} characters={characters} />
           {thinking && <p className="text-center text-sm text-muted-foreground animate-pulse">IA pensando…</p>}
           <Button onClick={() => reset(humanColor === "white" ? "black" : "white")} variant="secondary" className="w-full">
             Trocar de cor e reiniciar
@@ -106,6 +149,9 @@ function AIGame() {
           <Button onClick={() => setDifficulty(null)} variant="outline" className="w-full">
             Mudar dificuldade
           </Button>
+          <Button onClick={() => { setDifficulty(null); setCharactersChosen(false); reset("white"); }} variant="outline" className="w-full">
+            Trocar personagens
+          </Button>
         </div>
         <div className="order-1 md:order-2">
           <GameBoard
@@ -114,6 +160,7 @@ function AIGame() {
             winner={winner}
             controls={[humanColor]}
             locked={thinking}
+            characters={characters}
             onMove={(_f, _t, next, win) => {
               setBoard(next);
               if (win) setWinner(humanColor);
