@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
+import { ProceduralFieldBackground } from "@/components/ProceduralFieldBackground";
 import horseWhite from "@/assets/horse-white.png";
 import horseBlack from "@/assets/horse-black.png";
 
@@ -15,8 +16,9 @@ export function GameLayout({
   showHome?: boolean;
 }) {
   return (
-    <div className="min-h-screen pasture-bg">
-      <div className="grass-pattern absolute inset-x-0 bottom-0 h-32 opacity-60 pointer-events-none" />
+    <div className="relative min-h-screen overflow-hidden bg-[#a9d875]">
+      <ProceduralFieldBackground />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_38%,rgba(255,246,189,0.24),transparent_42%)] pointer-events-none" />
       <div className="relative z-10 mx-auto max-w-5xl px-4 py-6 sm:py-10">
         <header className="flex items-center justify-between mb-6">
           <Link to="/" className="flex items-center gap-2 hover-scale">

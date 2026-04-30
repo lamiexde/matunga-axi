@@ -1,6 +1,7 @@
 import horseWhite from "@/assets/horse-white.png";
 import horseBlack from "@/assets/horse-black.png";
-import type { Player } from "@/lib/matunga";
+import grandmaHorse from "@/assets/grandma-horse.png";
+import type { Player, PlayerCharacter } from "@/lib/matunga";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -9,13 +10,23 @@ interface Props {
   shake?: boolean;
   celebrate?: boolean;
   size?: number;
+  character?: PlayerCharacter | null;
 }
 
-export function HorsePiece({ player, selected, shake, celebrate, size = 56 }: Props) {
+const CHARACTER_ASSETS: Record<PlayerCharacter, { src: string; alt: string }> = {
+  white_horse: { src: horseWhite, alt: "Cavalo branco" },
+  black_horse: { src: horseBlack, alt: "Cavalo preto" },
+  grandma: { src: grandmaHorse, alt: "Vovó cavalo" },
+};
+
+export function HorsePiece({ player, selected, shake, celebrate, size = 56, character }: Props) {
+  const fallbackCharacter: PlayerCharacter = player === "white" ? "white_horse" : "black_horse";
+  const piece = CHARACTER_ASSETS[character ?? fallbackCharacter];
+
   return (
     <img
-      src={player === "white" ? horseWhite : horseBlack}
-      alt={player === "white" ? "Cavalo branco" : "Cavalo preto"}
+      src={piece.src}
+      alt={piece.alt}
       width={size}
       height={size}
       draggable={false}

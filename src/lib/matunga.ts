@@ -1,5 +1,6 @@
 // Matunga game logic — knight-movement strategy
 export type Player = "white" | "black";
+export type PlayerCharacter = "white_horse" | "black_horse" | "grandma";
 export type Cell = Player | null;
 export type Board = Cell[][]; // 6x6 [row][col]
 

@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Procedural Field Board Background</title>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #a9d875;
+      }
+
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="field"></canvas>
+
+    <script>
+      const CONFIG = {
+        seed: 18429,
+        boardCells: 8,
+        boardMaxSize: 500,
+        boardMinMargin: 44,
+        baseGrassDensity: 0.00062,
+        animatedGrassRatio: 0.18,
+        windIntensity: 0.54,
+        particles: true,
+        fenceScale: 0.94,
+        targetFps: 42,
+      };
+
+      const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const canvas = document.getElementById("field");
+      const ctx = canvas.getContext("2d", { alpha: false });
+
+      let dpr = 1;
+      let width = 0;
+      let height = 0;
+      let staticLayer;
+      let staticCtx;
+      let blades = [];
+      let animatedBlades = [];
+      let edgeBlades = [];
+      let particles = [];
+      let boardConfig;
+      let fenceConfig;
+      let mouse = { x: 0, y: 0, tx: 0, ty: 0 };
+      let lastFrame = 0;
+      let frameHistory = [];
+      let densityScale = 1;
+      let resizeTimer = 0;
+
+      function createSeededRandom(seed) {
+        let state = seed >>> 0;
+        return function random() {
+          state += 0x6d2b79f5;
+          let t = state;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      function lerp(a, b, t) {
+        return a + (b - a) * t;
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function hexToRgb(hex) {
+        const v = parseInt(hex.slice(1), 16);
+        return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+      }
+
+      function mixColor(a, b, t, alpha = 1) {
+        const ca = hexToRgb(a);
+        const cb = hexToRgb(b);
+        return `rgba(${Math.round(lerp(ca[0], cb[0], t))}, ${Math.round(lerp(ca[1], cb[1], t))}, ${Math.round(lerp(ca[2], cb[2], t))}, ${alpha})`;
+      }
+
+      function createCanvasLayer(w, h) {
+        const layer = document.createElement("canvas");
+        layer.width = Math.max(1, Math.floor(w * dpr));
+        layer.height = Math.max(1, Math.floor(h * dpr));
+        const layerCtx = layer.getContext("2d", { alpha: true });
+        layerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return [layer, layerCtx];
+      }
+
+      function getBoardConfig(w, h) {
+        const available = Math.min(w, h) - CONFIG.boardMinMargin * 2;
+        const size = Math.floor(clamp(available * 0.5, 270, CONFIG.boardMaxSize));
+        return {
+          x: Math.round((w - size) / 2),
+          y: Math.round((h - size) / 2),
+          size,
+          cells: CONFIG.boardCells,
+          cell: size / CONFIG.boardCells,
+          radius: 10,
+        };
+      }
+
+      function getFenceConfig(board) {
+        const gap = clamp(board.size * 0.13, 42, 72) * CONFIG.fenceScale;
+        const rail = clamp(board.size * 0.014, 5, 8) * CONFIG.fenceScale;
+        return {
+          x: board.x - gap,
+          y: board.y - gap,
+          w: board.size + gap * 2,
+          h: board.size + gap * 2,
+          gap,
+          rail,
+          plankW: clamp(board.size * 0.032, 13, 19) * CONFIG.fenceScale,
+          plankH: clamp(board.size * 0.105, 40, 60) * CONFIG.fenceScale,
+        };
+      }
+
+      function drawGrassBase(baseCtx, w, h) {
+        const random = createSeededRandom(CONFIG.seed + 1);
+        const gradient = baseCtx.createLinearGradient(0, 0, w, h);
+        gradient.addColorStop(0, "#c2df7a");
+        gradient.addColorStop(0.45, "#8fc85e");
+        gradient.addColorStop(1, "#63a856");
+        baseCtx.fillStyle = gradient;
+        baseCtx.fillRect(0, 0, w, h);
+
+        baseCtx.globalCompositeOperation = "overlay";
+        for (let i = 0; i < 220; i++) {
+          const x = random() * w;
+          const y = random() * h;
+          const r = lerp(30, 150, random());
+          const g = baseCtx.createRadialGradient(x, y, 0, x, y, r);
+          const warm = random() > 0.48;
+          g.addColorStop(0, warm ? "rgba(255, 227, 122, 0.16)" : "rgba(103, 174, 86, 0.18)");
+          g.addColorStop(1, "rgba(0, 0, 0, 0)");
+          baseCtx.fillStyle = g;
+          baseCtx.beginPath();
+          baseCtx.arc(x, y, r, 0, Math.PI * 2);
+          baseCtx.fill();
+        }
+        baseCtx.globalCompositeOperation = "source-over";
+
+        const noiseSize = 3;
+        const image = baseCtx.createImageData(Math.ceil(w / noiseSize), Math.ceil(h / noiseSize));
+        for (let i = 0; i < image.data.length; i += 4) {
+          const n = Math.floor(random() * 42);
+          image.data[i] = 118 + n;
+          image.data[i + 1] = 151 + n;
+          image.data[i + 2] = 68 + n * 0.5;
+          image.data[i + 3] = 24;
+        }
+        const noise = document.createElement("canvas");
+        noise.width = image.width;
+        noise.height = image.height;
+        noise.getContext("2d").putImageData(image, 0, 0);
+        baseCtx.imageSmoothingEnabled = false;
+        baseCtx.globalAlpha = 0.35;
+        baseCtx.drawImage(noise, 0, 0, w, h);
+        baseCtx.globalAlpha = 1;
+        baseCtx.imageSmoothingEnabled = true;
+      }
+
+      function generateGrassBlades(w, h, density) {
+        const random = createSeededRandom(CONFIG.seed + 2);
+        const count = Math.floor(w * h * density * densityScale);
+        const list = [];
+        const clusterCount = Math.max(24, Math.floor(count / 58));
+        const clusters = Array.from({ length: clusterCount }, () => ({
+          x: random() * w,
+          y: random() * h,
+          r: lerp(45, 160, random()),
+          pull: lerp(0.16, 0.78, random()),
+        }));
+
+        for (let i = 0; i < count; i++) {
+          const c = clusters[Math.floor(random() * clusters.length)];
+          const angle = random() * Math.PI * 2;
+          const dist = Math.pow(random(), 1.9) * c.r;
+          const freeX = random() * w;
+          const freeY = random() * h;
+          const x = lerp(freeX, c.x + Math.cos(angle) * dist, c.pull);
+          const y = lerp(freeY, c.y + Math.sin(angle) * dist, c.pull);
+          const nearBoard =
+            x > boardConfig.x - 28 &&
+            x < boardConfig.x + boardConfig.size + 28 &&
+            y > boardConfig.y - 28 &&
+            y < boardConfig.y + boardConfig.size + 28;
+
+          if (
+            x > boardConfig.x + 4 &&
+            x < boardConfig.x + boardConfig.size - 4 &&
+            y > boardConfig.y + 4 &&
+            y < boardConfig.y + boardConfig.size - 4
+          ) {
+            continue;
+          }
+
+          const shade = random();
+          list.push({
+            x,
+            y,
+            h: lerp(5, nearBoard ? 18 : 26, Math.pow(random(), 0.7)),
+            lean: lerp(-0.42, 0.42, random()) + (x / w - 0.5) * 0.08,
+            width: lerp(0.45, 1.8, random()),
+            alpha: lerp(0.28, 0.78, random()),
+            phase: random() * Math.PI * 2,
+            sway: lerp(0.18, 1.15, random()),
+            color: mixColor(shade > 0.55 ? "#d8dc78" : "#5ca64e", shade > 0.55 ? "#76b24e" : "#b4cf62", random(), 1),
+          });
+        }
+        return list;
+      }
+
+      function generateEdgeBlades(board) {
+        const random = createSeededRandom(CONFIG.seed + 3);
+        const list = [];
+        const count = Math.floor(board.size * 1.4 * densityScale);
+        for (let i = 0; i < count; i++) {
+          const side = Math.floor(random() * 4);
+          const t = random();
+          const inset = lerp(-8, 8, random());
+          const x =
+            side === 0 || side === 2
+              ? board.x + t * board.size
+              : side === 1
+                ? board.x + board.size + inset
+                : board.x - inset;
+          const y =
+            side === 1 || side === 3
+              ? board.y + t * board.size
+              : side === 0
+                ? board.y - inset
+                : board.y + board.size + inset;
+          list.push({
+            x,
+            y,
+            h: lerp(8, 24, random()),
+            lean: lerp(-0.5, 0.5, random()),
+            width: lerp(0.7, 1.5, random()),
+            alpha: lerp(0.35, 0.72, random()),
+            phase: random() * Math.PI * 2,
+            sway: lerp(0.25, 0.9, random()),
+            color: mixColor("#5c9f4d", "#d5d476", random(), 1),
+          });
+        }
+        return list;
+      }
+
+      function drawBlade(drawCtx, blade, time, animated) {
+        const sway = animated && !prefersReducedMotion
+          ? Math.sin(time * 0.0012 + blade.phase) * CONFIG.windIntensity * blade.sway
+          : 0;
+        const tipX = blade.x + (blade.lean + sway * 0.22) * blade.h;
+        const tipY = blade.y - blade.h;
+        drawCtx.globalAlpha = blade.alpha;
+        drawCtx.strokeStyle = blade.color;
+        drawCtx.lineWidth = blade.width;
+        drawCtx.beginPath();
+        drawCtx.moveTo(blade.x, blade.y);
+        drawCtx.bezierCurveTo(
+          blade.x + blade.lean * blade.h * 0.25,
+          blade.y - blade.h * 0.34,
+          tipX - sway * 2,
+          blade.y - blade.h * 0.72,
+          tipX,
+          tipY,
+        );
+        drawCtx.stroke();
+        drawCtx.globalAlpha = 1;
+      }
+
+      function drawGrassDetails(drawCtx, list, time, animated = false) {
+        drawCtx.lineCap = "round";
+        drawCtx.lineJoin = "round";
+        for (const blade of list) {
+          drawBlade(drawCtx, blade, time, animated);
+        }
+      }
+
+      function drawGroundDetails(drawCtx, w, h) {
+        const random = createSeededRandom(CONFIG.seed + 4);
+        for (let i = 0; i < 80 * densityScale; i++) {
+          const x = random() * w;
+          const y = random() * h;
+          if (x > boardConfig.x - 20 && x < boardConfig.x + boardConfig.size + 20 && y > boardConfig.y - 20 && y < boardConfig.y + boardConfig.size + 20) {
+            continue;
+          }
+          const rx = lerp(5, 28, random());
+          const ry = lerp(3, 14, random());
+          drawCtx.save();
+          drawCtx.translate(x, y);
+          drawCtx.rotate(random() * Math.PI);
+          drawCtx.fillStyle = mixColor("#9b7d4c", "#cfad68", random(), lerp(0.07, 0.15, random()));
+          drawCtx.beginPath();
+          drawCtx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+          drawCtx.fill();
+          drawCtx.restore();
+        }
+
+        for (let i = 0; i < 160 * densityScale; i++) {
+          const x = random() * w;
+          const y = random() * h;
+          const kind = random();
+          drawCtx.save();
+          drawCtx.translate(x, y);
+          drawCtx.rotate(random() * Math.PI * 2);
+          if (kind < 0.45) {
+            drawCtx.fillStyle = mixColor("#d7b868", "#7fa64c", random(), 0.46);
+            drawCtx.beginPath();
+            drawCtx.ellipse(0, 0, lerp(2, 5, random()), lerp(0.8, 2, random()), 0, 0, Math.PI * 2);
+            drawCtx.fill();
+          } else if (kind < 0.82) {
+            drawCtx.fillStyle = mixColor("#8e9270", "#e2d18c", random(), 0.34);
+            drawCtx.beginPath();
+            drawCtx.arc(0, 0, lerp(0.8, 2.2, random()), 0, Math.PI * 2);
+            drawCtx.fill();
+          } else {
+            drawCtx.fillStyle = random() > 0.5 ? "rgba(232, 208, 97, 0.55)" : "rgba(236, 174, 154, 0.48)";
+            drawCtx.beginPath();
+            drawCtx.arc(0, 0, lerp(1, 2.4, random()), 0, Math.PI * 2);
+            drawCtx.fill();
+          }
+          drawCtx.restore();
+        }
+      }
+
+      function roundedRectPath(drawCtx, x, y, w, h, r) {
+        drawCtx.beginPath();
+        drawCtx.moveTo(x + r, y);
+        drawCtx.arcTo(x + w, y, x + w, y + h, r);
+        drawCtx.arcTo(x + w, y + h, x, y + h, r);
+        drawCtx.arcTo(x, y + h, x, y, r);
+        drawCtx.arcTo(x, y, x + w, y, r);
+        drawCtx.closePath();
+      }
+
+      function drawBoardShadow(drawCtx, board, time = 0) {
+        const breathe = prefersReducedMotion ? 0 : Math.sin(time * 0.0007) * 0.04;
+        drawCtx.save();
+        drawCtx.translate(0, 8);
+        drawCtx.shadowColor = `rgba(86, 88, 76, ${0.2 + breathe})`;
+        drawCtx.shadowBlur = 22;
+        drawCtx.shadowOffsetY = 8;
+        drawCtx.fillStyle = "rgba(83, 91, 58, 0.22)";
+        roundedRectPath(drawCtx, board.x - 9, board.y - 9, board.size + 18, board.size + 18, board.radius + 8);
+        drawCtx.fill();
+        drawCtx.restore();
+      }
+
+      function drawBoard(drawCtx, board) {
+        drawCtx.save();
+        roundedRectPath(drawCtx, board.x - 10, board.y - 10, board.size + 20, board.size + 20, board.radius + 8);
+        const frame = drawCtx.createLinearGradient(board.x, board.y, board.x + board.size, board.y + board.size);
+        frame.addColorStop(0, "#d3975d");
+        frame.addColorStop(1, "#a86a43");
+        drawCtx.fillStyle = frame;
+        drawCtx.fill();
+
+        drawCtx.shadowColor = "rgba(255, 242, 184, 0.22)";
+        drawCtx.shadowBlur = 8;
+        drawCtx.shadowOffsetY = -2;
+        roundedRectPath(drawCtx, board.x - 5, board.y - 5, board.size + 10, board.size + 10, board.radius + 4);
+        drawCtx.fillStyle = "#bd7b4f";
+        drawCtx.fill();
+        drawCtx.shadowColor = "transparent";
+
+        const random = createSeededRandom(CONFIG.seed + 5);
+        for (let row = 0; row < board.cells; row++) {
+          for (let col = 0; col < board.cells; col++) {
+            const x = board.x + col * board.cell;
+            const y = board.y + row * board.cell;
+            const light = (row + col) % 2 === 0;
+            const jitter = random() * 0.16;
+            const g = drawCtx.createLinearGradient(x, y, x + board.cell, y + board.cell);
+            g.addColorStop(0, light ? mixColor("#f3df91", "#bfe17a", jitter) : mixColor("#8fcf63", "#6fb35c", jitter));
+            g.addColorStop(1, light ? mixColor("#d5b96e", "#e6d58b", jitter) : mixColor("#5f9f55", "#9cc36b", jitter));
+            drawCtx.fillStyle = g;
+            drawCtx.fillRect(x, y, board.cell + 0.5, board.cell + 0.5);
+
+            drawCtx.globalAlpha = 0.08;
+            drawCtx.strokeStyle = light ? "#fff5bf" : "#507d4b";
+            drawCtx.lineWidth = 1;
+            drawCtx.beginPath();
+            drawCtx.moveTo(x + 7 + random() * 6, y + random() * board.cell);
+            drawCtx.lineTo(x + board.cell - 7, y + random() * board.cell);
+            drawCtx.stroke();
+            drawCtx.globalAlpha = 1;
+          }
+        }
+
+        drawCtx.strokeStyle = "rgba(109, 88, 58, 0.32)";
+        drawCtx.lineWidth = 1;
+        for (let i = 0; i <= board.cells; i++) {
+          const p = board.x + i * board.cell;
+          drawCtx.beginPath();
+          drawCtx.moveTo(p, board.y);
+          drawCtx.lineTo(p, board.y + board.size);
+          drawCtx.stroke();
+          drawCtx.beginPath();
+          drawCtx.moveTo(board.x, board.y + i * board.cell);
+          drawCtx.lineTo(board.x + board.size, board.y + i * board.cell);
+          drawCtx.stroke();
+        }
+
+        const inner = drawCtx.createLinearGradient(board.x, board.y, board.x, board.y + board.size);
+        inner.addColorStop(0, "rgba(255,255,255,0.16)");
+        inner.addColorStop(0.12, "rgba(255,255,255,0)");
+        inner.addColorStop(1, "rgba(114,76,45,0.12)");
+        drawCtx.fillStyle = inner;
+        drawCtx.fillRect(board.x, board.y, board.size, board.size);
+
+        drawCtx.strokeStyle = "rgba(255, 246, 198, 0.42)";
+        drawCtx.lineWidth = 2;
+        drawCtx.strokeRect(board.x + 1, board.y + 1, board.size - 2, board.size - 2);
+        drawCtx.restore();
+      }
+
+      function drawFenceShadow(drawCtx, fence, time = 0) {
+        const breathe = prefersReducedMotion ? 0 : Math.sin(time * 0.0008 + 1.2) * 0.03;
+        drawCtx.save();
+        drawCtx.strokeStyle = `rgba(112, 95, 78, ${0.13 + breathe})`;
+        drawCtx.lineWidth = fence.plankH * 0.34;
+        drawCtx.lineCap = "round";
+        drawCtx.translate(6, 9);
+        drawCtx.strokeRect(fence.x, fence.y, fence.w, fence.h);
+        drawCtx.restore();
+      }
+
+      function drawWoodPlank(drawCtx, x, y, w, h, rot, vertical, tone, seed) {
+        const random = createSeededRandom(seed);
+        drawCtx.save();
+        drawCtx.translate(x, y);
+        drawCtx.rotate(rot);
+        const px = -w / 2;
+        const py = -h / 2;
+
+        drawCtx.shadowColor = "rgba(117, 81, 61, 0.18)";
+        drawCtx.shadowBlur = 4;
+        drawCtx.shadowOffsetY = 3;
+
+        const grad = drawCtx.createLinearGradient(px, py, vertical ? px + w : px, vertical ? py : py + h);
+        grad.addColorStop(0, mixColor("#ffe1a8", "#e7a46d", tone * 0.45));
+        grad.addColorStop(0.55, mixColor("#f5bb79", "#d98b5b", tone * 0.55));
+        grad.addColorStop(1, mixColor("#d58a5b", "#bc7154", tone * 0.5));
+        drawCtx.fillStyle = grad;
+
+        drawCtx.beginPath();
+        if (vertical) {
+          const wobble = w * 0.12;
+          drawCtx.moveTo(px + wobble, py + h);
+          drawCtx.lineTo(px + random() * wobble, py + 8);
+          drawCtx.quadraticCurveTo(0, py - 5, -px - random() * wobble, py + 8);
+          drawCtx.lineTo(-px - wobble, py + h);
+        } else {
+          const wobble = h * 0.15;
+          drawCtx.moveTo(px + 7, py + random() * wobble);
+          drawCtx.lineTo(-px - 7, py + random() * wobble);
+          drawCtx.quadraticCurveTo(-px + 4, 0, -px - 7, -py - random() * wobble);
+          drawCtx.lineTo(px + 7, -py - random() * wobble);
+          drawCtx.quadraticCurveTo(px - 4, 0, px + 7, py + random() * wobble);
+        }
+        drawCtx.closePath();
+        drawCtx.fill();
+
+        drawCtx.shadowColor = "transparent";
+        drawCtx.strokeStyle = "rgba(173, 88, 73, 0.72)";
+        drawCtx.lineWidth = Math.max(1.5, w * 0.13);
+        drawCtx.stroke();
+
+        drawCtx.strokeStyle = "rgba(255, 243, 204, 0.58)";
+        drawCtx.lineWidth = 1.2;
+        drawCtx.beginPath();
+        if (vertical) {
+          drawCtx.moveTo(px + w * 0.28, py + 10);
+          drawCtx.bezierCurveTo(px + w * 0.2, py + h * 0.35, px + w * 0.32, py + h * 0.64, px + w * 0.24, py + h - 8);
+        } else {
+          drawCtx.moveTo(px + 10, py + h * 0.28);
+          drawCtx.bezierCurveTo(px + w * 0.35, py + h * 0.2, px + w * 0.66, py + h * 0.32, px + w - 10, py + h * 0.24);
+        }
+        drawCtx.stroke();
+
+        drawCtx.strokeStyle = "rgba(145, 73, 55, 0.28)";
+        drawCtx.lineWidth = 1;
+        for (let i = 0; i < 2; i++) {
+          drawCtx.beginPath();
+          if (vertical) {
+            const vx = px + w * lerp(0.25, 0.78, random());
+            drawCtx.moveTo(vx, py + 5);
+            drawCtx.bezierCurveTo(vx + random() * 2 - 1, py + h * 0.35, vx + random() * 2 - 1, py + h * 0.7, vx, py + h - 5);
+          } else {
+            const vy = py + h * lerp(0.28, 0.72, random());
+            drawCtx.moveTo(px + 5, vy);
+            drawCtx.bezierCurveTo(px + w * 0.35, vy + random() * 2 - 1, px + w * 0.72, vy + random() * 2 - 1, px + w - 5, vy);
+          }
+          drawCtx.stroke();
+        }
+        drawCtx.restore();
+      }
+
+      function drawFence(drawCtx, fence) {
+        const random = createSeededRandom(CONFIG.seed + 6);
+        const spacing = fence.plankW * 2.25;
+
+        drawCtx.save();
+        drawCtx.lineCap = "round";
+        const railOffset = fence.plankH * 0.22;
+        const rails = [
+          [fence.x, fence.y + railOffset, fence.x + fence.w, fence.y + railOffset],
+          [fence.x, fence.y + fence.h - railOffset, fence.x + fence.w, fence.y + fence.h - railOffset],
+          [fence.x + railOffset, fence.y, fence.x + railOffset, fence.y + fence.h],
+          [fence.x + fence.w - railOffset, fence.y, fence.x + fence.w - railOffset, fence.y + fence.h],
+        ];
+        for (const [x1, y1, x2, y2] of rails) {
+          drawCtx.strokeStyle = "rgba(180, 92, 76, 0.78)";
+          drawCtx.lineWidth = fence.rail + 3;
+          drawCtx.beginPath();
+          drawCtx.moveTo(x1, y1);
+          drawCtx.lineTo(x2, y2);
+          drawCtx.stroke();
+
+          drawCtx.strokeStyle = "rgba(241, 174, 108, 0.96)";
+          drawCtx.lineWidth = fence.rail;
+          drawCtx.beginPath();
+          drawCtx.moveTo(x1, y1 - 1);
+          drawCtx.lineTo(x2, y2 - 1);
+          drawCtx.stroke();
+
+          drawCtx.strokeStyle = "rgba(255, 238, 191, 0.55)";
+          drawCtx.lineWidth = Math.max(1, fence.rail * 0.24);
+          drawCtx.beginPath();
+          drawCtx.moveTo(x1, y1 - fence.rail * 0.2);
+          drawCtx.lineTo(x2, y2 - fence.rail * 0.2);
+          drawCtx.stroke();
+        }
+
+        let index = 0;
+        for (let x = fence.x; x <= fence.x + fence.w; x += spacing) {
+          const topH = fence.plankH * lerp(0.9, 1.13, random());
+          const bottomH = fence.plankH * lerp(0.9, 1.13, random());
+          drawWoodPlank(drawCtx, x, fence.y, fence.plankW * lerp(0.86, 1.12, random()), topH, lerp(-0.035, 0.035, random()), true, random(), CONFIG.seed + 600 + index++);
+          drawWoodPlank(drawCtx, x, fence.y + fence.h, fence.plankW * lerp(0.86, 1.12, random()), bottomH, lerp(-0.035, 0.035, random()), true, random(), CONFIG.seed + 800 + index++);
+        }
+
+        for (let y = fence.y; y <= fence.y + fence.h; y += spacing) {
+          const leftW = fence.plankH * lerp(0.86, 1.14, random());
+          const rightW = fence.plankH * lerp(0.86, 1.14, random());
+          drawWoodPlank(drawCtx, fence.x, y, leftW, fence.plankW * lerp(0.86, 1.12, random()), lerp(-0.035, 0.035, random()), false, random(), CONFIG.seed + 1000 + index++);
+          drawWoodPlank(drawCtx, fence.x + fence.w, y, rightW, fence.plankW * lerp(0.86, 1.12, random()), lerp(-0.035, 0.035, random()), false, random(), CONFIG.seed + 1200 + index++);
+        }
+        drawCtx.restore();
+      }
+
+      function generateParticles(w, h) {
+        const random = createSeededRandom(CONFIG.seed + 7);
+        const count = prefersReducedMotion || !CONFIG.particles ? 0 : Math.floor(clamp((w * h) / 42000, 10, 34));
+        return Array.from({ length: count }, () => ({
+          x: random() * w,
+          y: random() * h,
+          r: lerp(0.8, 2.2, random()),
+          speed: lerp(6, 22, random()),
+          drift: lerp(-4, 14, random()),
+          phase: random() * Math.PI * 2,
+          alpha: lerp(0.12, 0.34, random()),
+        }));
+      }
+
+      function drawParticles(drawCtx, list, time) {
+        if (!list.length) return;
+        drawCtx.save();
+        drawCtx.fillStyle = "#f0dfa0";
+        for (const p of list) {
+          const t = time * 0.001;
+          const x = (p.x + t * p.drift + Math.sin(t + p.phase) * 8) % (width + 20);
+          const y = (p.y - t * p.speed + height + 20) % (height + 20);
+          drawCtx.globalAlpha = p.alpha * (0.7 + Math.sin(t * 1.7 + p.phase) * 0.3);
+          drawCtx.beginPath();
+          drawCtx.arc(x - 10, y - 10, p.r, 0, Math.PI * 2);
+          drawCtx.fill();
+        }
+        drawCtx.restore();
+        drawCtx.globalAlpha = 1;
+      }
+
+      function renderStaticLayer() {
+        [staticLayer, staticCtx] = createCanvasLayer(width, height);
+        drawGrassBase(staticCtx, width, height);
+        drawGroundDetails(staticCtx, width, height);
+        const staticGrass = prefersReducedMotion ? blades : blades.filter((_, i) => i % 5 !== 0);
+        drawGrassDetails(staticCtx, staticGrass, 0, false);
+        drawBoardShadow(staticCtx, boardConfig, 0);
+        drawFenceShadow(staticCtx, fenceConfig, 0);
+        drawBoard(staticCtx, boardConfig);
+        drawFence(staticCtx, fenceConfig);
+        if (prefersReducedMotion) {
+          drawGrassDetails(staticCtx, edgeBlades, 0, false);
+        }
+      }
+
+      function resizeCanvas() {
+        dpr = Math.min(2, window.devicePixelRatio || 1);
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        const smallScreen = Math.min(width, height) < 680;
+        densityScale = smallScreen ? 0.55 : clamp((width * height) / (1280 * 760), 0.72, 1.35);
+        boardConfig = getBoardConfig(width, height);
+        fenceConfig = getFenceConfig(boardConfig);
+        blades = generateGrassBlades(width, height, CONFIG.baseGrassDensity);
+        animatedBlades = blades.filter((_, i) => i % Math.max(2, Math.round(1 / CONFIG.animatedGrassRatio)) === 0);
+        edgeBlades = generateEdgeBlades(boardConfig);
+        particles = generateParticles(width, height);
+        renderStaticLayer();
+      }
+
+      function scheduleResize() {
+        window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(resizeCanvas, 140);
+      }
+
+      function drawAnimatedGrass(time) {
+        if (prefersReducedMotion) return;
+        drawGrassDetails(ctx, animatedBlades, time, true);
+        drawGrassDetails(ctx, edgeBlades, time, true);
+      }
+
+      function adjustDensityFromFps(now) {
+        frameHistory.push(now);
+        while (frameHistory.length > 40) frameHistory.shift();
+        if (frameHistory.length < 40) return;
+        const seconds = (frameHistory[frameHistory.length - 1] - frameHistory[0]) / 1000;
+        const fps = (frameHistory.length - 1) / seconds;
+        if (fps < 28 && densityScale > 0.55) {
+          densityScale *= 0.84;
+          blades = generateGrassBlades(width, height, CONFIG.baseGrassDensity);
+          animatedBlades = blades.filter((_, i) => i % Math.max(2, Math.round(1 / CONFIG.animatedGrassRatio)) === 0);
+          edgeBlades = generateEdgeBlades(boardConfig);
+          renderStaticLayer();
+          frameHistory = [];
+        }
+      }
+
+      function animate(now = 0) {
+        const minFrameTime = prefersReducedMotion ? 1000 : 1000 / CONFIG.targetFps;
+        if (now - lastFrame < minFrameTime) {
+          requestAnimationFrame(animate);
+          return;
+        }
+        lastFrame = now;
+
+        mouse.x = lerp(mouse.x, mouse.tx, 0.06);
+        mouse.y = lerp(mouse.y, mouse.ty, 0.06);
+        const px = prefersReducedMotion ? 0 : (mouse.x - 0.5) * 10;
+        const py = prefersReducedMotion ? 0 : (mouse.y - 0.5) * 8;
+
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(staticLayer, px * -0.28 - 12, py * -0.28 - 12, width + 24, height + 24);
+
+        if (!prefersReducedMotion) {
+          drawAnimatedGrass(now);
+          drawParticles(ctx, particles, now);
+        }
+
+        adjustDensityFromFps(now);
+        requestAnimationFrame(animate);
+      }
+
+      window.addEventListener("resize", scheduleResize, { passive: true });
+      window.addEventListener(
+        "pointermove",
+        (event) => {
+          mouse.tx = event.clientX / Math.max(1, width);
+          mouse.ty = event.clientY / Math.max(1, height);
+        },
+        { passive: true },
+      );
+
+      resizeCanvas();
+      requestAnimationFrame(animate);
+    </script>
+  </body>
+</html>

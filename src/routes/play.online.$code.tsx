@@ -2,6 +2,11 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { GameLayout } from "@/components/GameLayout";
 import { GameBoard } from "@/components/GameBoard";
+import {
+  CharacterPicker,
+  getCharacterImage,
+  getCharacterLabel,
+} from "@/components/CharacterPicker";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { supabase } from "@/integrations/supabase/client";
@@ -12,6 +17,7 @@ import {
   checkWinner,
   getOrCreatePlayerId,
   initialBoard,
+  type PlayerCharacter,
 } from "@/lib/matunga";
 import { TurnCard } from "./play.local";
 import { toast } from "sonner";
@@ -36,33 +42,36 @@ interface RoomRow {
   winner: Player | null;
   player_white: string | null;
   player_black: string | null;
+  player_white_character: PlayerCharacter | null;
+  player_black_character: PlayerCharacter | null;
 }
 
 function OnlineRoom() {
   const { code } = Route.useParams();
   const [room, setRoom] = useState<RoomRow | null>(null);
   const [loading, setLoading] = useState(true);
+  const [joining, setJoining] = useState(false);
+  const [selectedCharacter, setSelectedCharacter] = useState<PlayerCharacter>("white_horse");
   const [notFound, setNotFound] = useState(false);
   const playerId = getOrCreatePlayerId();
 
-  // initial fetch + atomic join via RPC
+  // initial fetch; joining happens after character selection
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase.rpc("join_matunga_room", {
-        _code: code,
-        _player_id: playerId,
-      });
+      const { data, error } = await supabase
+        .from("matunga_rooms")
+        .select("*")
+        .eq("code", code)
+        .maybeSingle();
       if (cancelled) return;
       if (error || !data) {
-        console.error("[matunga] join error", error);
+        console.error("[matunga] room fetch error", error);
         setNotFound(true);
         setLoading(false);
         return;
       }
-      // RPC returning a composite returns an object, but supabase-js may wrap it as array
-      const r = (Array.isArray(data) ? data[0] : data) as RoomRow;
-      setRoom(r);
+      setRoom(data as unknown as RoomRow);
       setLoading(false);
     })();
     return () => {
@@ -90,6 +99,19 @@ function OnlineRoom() {
     };
   }, [room?.id]);
 
+  useEffect(() => {
+    if (!room) return;
+    const unavailable = [
+      room.player_white_character,
+      room.player_black_character,
+    ].filter(Boolean) as PlayerCharacter[];
+    if (!unavailable.includes(selectedCharacter)) return;
+
+    const nextCharacter = (["white_horse", "black_horse", "grandma"] as PlayerCharacter[])
+      .find((character) => !unavailable.includes(character));
+    if (nextCharacter) setSelectedCharacter(nextCharacter);
+  }, [room, selectedCharacter]);
+
   if (loading) return <GameLayout title="Carregando sala…"><div /></GameLayout>;
 
   if (notFound)
@@ -108,6 +130,40 @@ function OnlineRoom() {
     room.player_black === playerId ? "black" : null;
 
   const opponentJoined = !!room.player_white && !!room.player_black;
+  const roomFull = opponentJoined && !myColor;
+  const unavailableCharacters = [
+    room.player_white_character,
+    room.player_black_character,
+  ].filter(Boolean) as PlayerCharacter[];
+  const myCharacter =
+    myColor === "white" ? room.player_white_character :
+    myColor === "black" ? room.player_black_character : null;
+
+  const joinRoom = async () => {
+    setJoining(true);
+    try {
+      const { data, error } = await supabase.rpc("join_matunga_room", {
+        _code: code,
+        _player_id: playerId,
+        _character: selectedCharacter,
+      });
+      if (error || !data) throw error ?? new Error("room_join_failed");
+      const nextRoom = (Array.isArray(data) ? data[0] : data) as RoomRow;
+      setRoom(nextRoom);
+      if (nextRoom.player_white !== playerId && nextRoom.player_black !== playerId) {
+        toast.error("Sala cheia.");
+      }
+    } catch (e: any) {
+      if (String(e?.message ?? "").includes("character_taken")) {
+        toast.error("Esse personagem já foi escolhido.");
+      } else {
+        toast.error("Não consegui entrar na sala.");
+      }
+      console.error(e);
+    } finally {
+      setJoining(false);
+    }
+  };
 
   const onMove = async (
     _from: [number, number],
@@ -161,10 +217,39 @@ function OnlineRoom() {
       title={`Sala ${code}`}
       subtitle={
         myColor
-          ? `Você joga com as ${myColor === "white" ? "brancas" : "pretas"}`
-          : "Você é espectador (sala cheia)"
+          ? `Você joga com as ${myColor === "white" ? "brancas" : "pretas"} como ${getCharacterLabel(myCharacter)}`
+          : roomFull
+            ? "Você é espectador (sala cheia)"
+            : "Escolha seu personagem para entrar"
       }
     >
+      {!myColor && !roomFull && (
+        <Card className="max-w-3xl mx-auto p-5 bg-card/95 mb-6">
+          <div className="flex flex-col gap-4">
+            <div>
+              <h2 className="font-bold text-xl">Saguão da sala</h2>
+              <p className="text-sm text-muted-foreground">
+                Escolha um personagem livre. O oponente não pode usar o mesmo.
+              </p>
+            </div>
+            <CharacterPicker
+              value={selectedCharacter}
+              unavailable={unavailableCharacters}
+              onChange={setSelectedCharacter}
+            />
+            <Button
+              onClick={joinRoom}
+              disabled={joining || unavailableCharacters.includes(selectedCharacter)}
+              size="lg"
+              className="self-center min-w-48"
+            >
+              {joining ? "Entrando…" : "Entrar na sala"}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {(myColor || roomFull) && (
       <div className="grid md:grid-cols-[1fr_auto] gap-6 items-start justify-items-center">
         <div className="order-2 md:order-1 w-full max-w-xs space-y-3">
           <Card className="p-3 bg-card/95 flex items-center justify-between gap-2">
@@ -182,6 +267,8 @@ function OnlineRoom() {
               Aguardando oponente entrar com o código…
             </Card>
           )}
+
+          <PlayerRoster room={room} playerId={playerId} />
 
           <TurnCard turn={room.turn} winner={room.winner} />
 
@@ -201,10 +288,62 @@ function OnlineRoom() {
             winner={room.winner}
             controls={myColor ? [myColor] : null}
             locked={!opponentJoined}
+            characters={{
+              white: room.player_white_character,
+              black: room.player_black_character,
+            }}
             onMove={onMove}
           />
         </div>
       </div>
+      )}
     </GameLayout>
+  );
+}
+
+function PlayerRoster({ room, playerId }: { room: RoomRow; playerId: string }) {
+  const players = [
+    {
+      color: "white" as Player,
+      player: room.player_white,
+      character: room.player_white_character,
+      label: "Brancas",
+    },
+    {
+      color: "black" as Player,
+      player: room.player_black,
+      character: room.player_black_character,
+      label: "Pretas",
+    },
+  ];
+
+  return (
+    <Card className="p-3 bg-card/95 space-y-2">
+      <p className="text-xs font-semibold text-muted-foreground">Jogadores</p>
+      {players.map((seat) => (
+        <div key={seat.color} className="flex items-center gap-3 rounded-lg bg-muted/45 p-2">
+          {seat.character ? (
+            <img
+              src={getCharacterImage(seat.character)}
+              alt={getCharacterLabel(seat.character)}
+              width={44}
+              height={44}
+              loading="lazy"
+              className="h-11 w-11 rounded-full object-cover bg-accent/30"
+            />
+          ) : (
+            <div className="h-11 w-11 rounded-full bg-background/70" />
+          )}
+          <div className="min-w-0">
+            <p className="text-sm font-bold">{seat.label}</p>
+            <p className="text-xs text-muted-foreground">
+              {seat.player
+                ? `${getCharacterLabel(seat.character)}${seat.player === playerId ? " (você)" : ""}`
+                : "Aguardando"}
+            </p>
+          </div>
+        </div>
+      ))}
+    </Card>
   );
 }

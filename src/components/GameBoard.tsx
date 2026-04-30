@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, memo } from "react";
 import {
   Board,
   Player,
+  PlayerCharacter,
   knightMoves,
   applyMove,
   checkWinner,
@@ -21,6 +22,7 @@ interface Props {
   controls: Player[] | null;
   /** Disable interaction (e.g. waiting for opponent / AI thinking). */
   locked?: boolean;
+  characters?: Partial<Record<Player, PlayerCharacter | null>>;
 }
 
 interface CellProps {
@@ -34,12 +36,13 @@ interface CellProps {
   turn: Player;
   validMoves: Array<[number, number]>;
   winner: Player | null;
+  character?: PlayerCharacter | null;
   onCellClick: (r: number, c: number) => void;
 }
 
 const BoardCell = memo(({
   r, c, cell, selected, isHint, isShaking, canControlTurn, turn,
-  validMoves, winner, onCellClick
+  validMoves, winner, character, onCellClick
 }: CellProps) => {
   const isLight = (r + c) % 2 === 0;
 
@@ -63,6 +66,7 @@ const BoardCell = memo(({
           shake={isShaking}
           celebrate={!!winner && cell === winner}
           size={48}
+          character={character}
         />
       )}
       {isHint && !cell && (
@@ -77,12 +81,13 @@ const BoardCell = memo(({
          prev.isShaking === next.isShaking &&
          prev.canControlTurn === next.canControlTurn &&
          prev.turn === next.turn &&
-         prev.winner === next.winner;
+         prev.winner === next.winner &&
+         prev.character === next.character;
 });
 
 BoardCell.displayName = "BoardCell";
 
-export function GameBoard({ board, turn, winner, onMove, controls, locked }: Props) {
+export function GameBoard({ board, turn, winner, onMove, controls, locked, characters }: Props) {
   const [selected, setSelected] = useState<[number, number] | null>(null);
   const [shake, setShake] = useState<[number, number] | null>(null);
   const lastWinner = useRef<Player | null>(null);
@@ -152,6 +157,7 @@ export function GameBoard({ board, turn, winner, onMove, controls, locked }: Pro
                 turn={turn}
                 validMoves={validMoves}
                 winner={winner}
+                character={cell ? characters?.[cell] : null}
                 onCellClick={handleCellClick}
               />
             );
