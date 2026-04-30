@@ -1,7 +1,5 @@
-import { Outlet, Link, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+import { Outlet, Link, createRootRoute } from "@tanstack/react-router";
 import { Toaster } from "@/components/ui/sonner";
-
-import appCss from "../styles.css?url";
 
 function NotFoundComponent() {
   return (
@@ -43,31 +41,10 @@ export const Route = createRootRoute({
       { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/a6a07dff-114f-4937-9cd5-23d95c158806/id-preview-73fe15ef--5a79c65d-2d11-4302-abbb-2580bf733c7b.lovable.app-1777480149179.png" },
       { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/a6a07dff-114f-4937-9cd5-23d95c158806/id-preview-73fe15ef--5a79c65d-2d11-4302-abbb-2580bf733c7b.lovable.app-1777480149179.png" },
     ],
-    links: [
-      {
-        rel: "stylesheet",
-        href: appCss,
-      },
-    ],
   }),
-  shellComponent: RootShell,
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
 });
-
-function RootShell({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en">
-      <head>
-        <HeadContent />
-      </head>
-      <body>
-        {children}
-        <Scripts />
-      </body>
-    </html>
-  );
-}
 
 function RootComponent() {
   return (
